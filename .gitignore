@@ -49,6 +49,9 @@ Thumbs.db
 *.orc
 *.avro
 *.zip
+# Ignore data folders
+/data/
+/Datasets/
 
 # Misc
 node_modules/
