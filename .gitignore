@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.env
+.env
+venv/
+ENV/
+*.egg-info/
+*.egg
+*.sqlite3
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# Hadoop/Spark
+*.log
+*.out
+*.crc
+*.class
+*.jar
+*.hadoop/
+*.spark/
+
+# MongoDB
+*.mongodb/
+
+# OS/Editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.bak
+*.tmp
+
+# VS Code
+.vscode/
+
+# Data
+*.csv
+*.tsv
+*.dat
+*.db
+*.json
+*.xlsx
+*.xls
+*.parquet
+*.orc
+*.avro
+*.zip
+
+# Misc
+node_modules/
+
+# Ignore secrets
+secrets.*
+
+# Ignore test output
+*.coverage
+coverage/
+
+# Ignore compiled files
+*.so
+*.dll
+*.exe
+
+# Ignore cloud configs
+firebase.json
+
+# Ignore requirements lock
+poetry.lock
+Pipfile.lock
