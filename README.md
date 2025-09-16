@@ -69,9 +69,11 @@ Dataset: ["Statistics and Social Network of YouTube Videos"](http://netsg.cs.sfu
 
 ## 👨‍💻 Team
 
-- **Ross Kugler** — Developer, Hadoop MapReduce, Liaison
-- **Huy (Harry) Ky** — Database Manager, MongoDB
-- **Ben Bordon** — Developer, Spark GraphX/GraphFrames, Documentation
+| Name           | Role                                 | Email                | GitHub      |
+| -------------- | ------------------------------------ | -------------------- | ----------- |
+| Ross Kugler    | Data Pipeline & API Lead, Hadoop MapReduce Researcher, Communication Liaison | ross.kugler@wsu.edu  | [rk3026](https://github.com/rk3026)      |
+| Huy (Harry) Ky | Database Manager, MongoDB Researcher            | giahuy.ky@wsu.edu    | [Harry908](https://github.com/Harry908)    |
+| Ben Bordon     | Analytics & Algorithms Lead, Spark GraphX/GraphFrames Researcher, Documentation | b.bordon@wsu.edu | [wizkid0101](https://github.com/wizkid0101)  |
 
 ---
 
