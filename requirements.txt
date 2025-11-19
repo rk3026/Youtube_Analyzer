@@ -1,0 +1,28 @@
+# YouTube Analyzer GUI Application Requirements
+
+# Web Framework
+streamlit>=1.28.0
+
+# Big Data Processing
+pyspark>=3.5.0
+
+# Database
+pymongo>=4.6.0
+
+# Data Manipulation
+pandas>=2.1.0
+numpy>=1.24.0
+
+# Visualization
+plotly>=5.18.0
+matplotlib>=3.8.0
+seaborn>=0.13.0
+
+# Graph Analysis
+networkx>=3.2.0
+
+# Configuration
+pyyaml>=6.0
+
+# Utilities
+python-dotenv>=1.0.0
