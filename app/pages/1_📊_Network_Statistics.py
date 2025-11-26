@@ -9,6 +9,13 @@ import plotly.express as px
 import plotly.graph_objects as go
 from typing import Dict, Any
 import logging
+import sys
+from pathlib import Path
+
+# Add parent directory to path for imports
+app_dir = Path(__file__).parent.parent
+if str(app_dir) not in sys.path:
+    sys.path.insert(0, str(app_dir))
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +34,13 @@ tab1, tab2 = st.tabs(["🔢 Degree Distribution", "📂 Categorized Statistics"]
 
 with tab1:
     st.markdown("### Degree Distribution Analysis")
-    st.info("This feature will display in-degree, out-degree, and total degree distributions for the video network.")
+    st.markdown("Analyze in-degree, out-degree, and total degree distributions for the video network.")
     
     # Sample size selector
     col1, col2 = st.columns([3, 1])
     with col1:
         sample_size = st.slider(
-            "Sample Size",
+            "Sample Size (edges)",
             min_value=1000,
             max_value=100000,
             value=50000,
@@ -41,45 +48,200 @@ with tab1:
             help="Number of edges to sample for analysis"
         )
     with col2:
-        if st.button("🔄 Run Analysis", use_container_width=True):
-            with st.spinner("Computing degree statistics..."):
-                st.success("Analysis will be implemented with your existing algorithms!")
+        run_analysis = st.button("🔄 Run Analysis", use_container_width=True, type="primary")
     
-    # Placeholder for results
-    st.markdown("#### Summary Statistics")
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Avg Total Degree", "TBD")
-    col2.metric("Max Degree", "TBD")
-    col3.metric("Min Degree", "TBD")
-    col4.metric("Std Dev", "TBD")
+    if run_analysis:
+        with st.spinner("Computing degree statistics..."):
+            try:
+                from utils import get_spark_connector
+                from analytics import DegreeAnalytics
+                
+                # Initialize analytics
+                spark_conn = get_spark_connector()
+                degree_analytics = DegreeAnalytics(spark_conn)
+                
+                # Run analysis
+                results = degree_analytics.run_full_analysis(sample_size=sample_size)
+                
+                # Store results in session state
+                st.session_state['degree_results'] = results
+                st.success("✅ Analysis complete!")
+                
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
+                logger.error(f"Degree analysis error: {e}", exc_info=True)
     
-    st.markdown("#### Degree Distribution")
-    st.info("📈 Histogram will be displayed here showing the distribution of degrees")
-    
-    st.markdown("#### Top 10 Videos by Degree")
-    st.info("📋 Table will show the most connected videos in the network")
+    # Display results if available
+    if 'degree_results' in st.session_state:
+        results = st.session_state['degree_results']
+        agg_stats = results['aggregate_stats']
+        
+        # Summary Statistics
+        st.markdown("#### Summary Statistics")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Avg Total Degree", f"{agg_stats['avg_degree']:.2f}")
+        col2.metric("Max Degree", f"{agg_stats['max_degree']:,}")
+        col3.metric("Min Degree", f"{agg_stats['min_degree']:,}")
+        col4.metric("Std Dev", f"{agg_stats['std_degree']:.2f}")
+        
+        # Degree Distribution Histogram
+        st.markdown("#### Degree Distribution")
+        dist_data = results['distribution']
+        if dist_data:
+            df_dist = pd.DataFrame(dist_data)
+            fig = px.bar(
+                df_dist,
+                x='degree',
+                y='count',
+                title='Video Degree Distribution',
+                labels={'degree': 'Total Degree', 'count': 'Number of Videos'}
+            )
+            fig.update_layout(showlegend=False)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No distribution data available")
+        
+        # Top 10 Videos by Degree
+        st.markdown("#### Top 10 Videos by Degree")
+        top_videos = results['top_videos']
+        if top_videos:
+            df_top = pd.DataFrame(top_videos)
+            df_top.index = range(1, len(df_top) + 1)
+            st.dataframe(
+                df_top,
+                column_config={
+                    "id": "Video ID",
+                    "total_degree": st.column_config.NumberColumn("Total Degree", format="%d"),
+                    "in_degree": st.column_config.NumberColumn("In-Degree", format="%d"),
+                    "out_degree": st.column_config.NumberColumn("Out-Degree", format="%d")
+                },
+                use_container_width=True
+            )
+        else:
+            st.info("No top videos data available")
+    else:
+        st.info("👆 Click 'Run Analysis' to compute degree statistics")
 
 with tab2:
     st.markdown("### Categorized Statistics")
-    st.info("This feature will display video statistics grouped by category, length, and view count.")
+    st.markdown("View video statistics grouped by category, length, and view count.")
     
-    # Category distribution placeholder
-    st.markdown("#### Videos by Category")
-    st.info("📊 Bar chart showing video count per category")
-    
-    col1, col2 = st.columns(2)
-    
+    # Sample size selector
+    col1, col2 = st.columns([3, 1])
     with col1:
-        st.markdown("#### Length Distribution")
-        st.info("🎬 Videos grouped by duration buckets")
-    
+        cat_sample_size = st.slider(
+            "Sample Size (videos)",
+            min_value=1000,
+            max_value=100000,
+            value=50000,
+            step=1000,
+            help="Number of videos to sample for analysis",
+            key="cat_sample"
+        )
     with col2:
-        st.markdown("#### View Count Distribution")
-        st.info("👁️ Videos grouped by view count ranges")
+        run_cat_analysis = st.button("🔄 Run Analysis", use_container_width=True, type="primary", key="cat_run")
+    
+    if run_cat_analysis:
+        with st.spinner("Computing categorized statistics..."):
+            try:
+                from utils import get_spark_connector
+                from analytics import CategoryAnalytics
+                
+                # Initialize analytics
+                spark_conn = get_spark_connector()
+                cat_analytics = CategoryAnalytics(spark_conn)
+                
+                # Run analysis
+                results = cat_analytics.run_full_analysis(sample_size=cat_sample_size)
+                
+                # Store results in session state
+                st.session_state['category_results'] = results
+                st.success("✅ Analysis complete!")
+                
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
+                logger.error(f"Category analysis error: {e}", exc_info=True)
+    
+    # Display results if available
+    if 'category_results' in st.session_state:
+        results = st.session_state['category_results']
+        
+        # Videos by Category
+        st.markdown("#### Videos by Category")
+        if results['by_category']:
+            df_cat = pd.DataFrame(results['by_category'])
+            # Show top 15 categories
+            df_cat_top = df_cat.head(15)
+            fig_cat = px.bar(
+                df_cat_top,
+                x='category',
+                y='count',
+                title='Top 15 Video Categories',
+                labels={'category': 'Category', 'count': 'Number of Videos'}
+            )
+            fig_cat.update_layout(xaxis_tickangle=-45)
+            st.plotly_chart(fig_cat, use_container_width=True)
+        else:
+            st.info("No category data available")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### Length Distribution")
+            if results['by_length']:
+                df_length = pd.DataFrame(results['by_length'])
+                fig_length = px.pie(
+                    df_length,
+                    names='bucket',
+                    values='count',
+                    title='Videos by Duration'
+                )
+                st.plotly_chart(fig_length, use_container_width=True)
+            else:
+                st.info("No length data available")
+        
+        with col2:
+            st.markdown("#### View Count Distribution")
+            if results['by_views']:
+                df_views = pd.DataFrame(results['by_views'])
+                fig_views = px.pie(
+                    df_views,
+                    names='bucket',
+                    values='count',
+                    title='Videos by View Count'
+                )
+                st.plotly_chart(fig_views, use_container_width=True)
+            else:
+                st.info("No view count data available")
+    else:
+        st.info("👆 Click 'Run Analysis' to compute categorized statistics")
 
 st.markdown("---")
-st.markdown("### Implementation Note")
-st.info("""
-This page will integrate with your existing `Degree_distribution_Categorized_Statistics.py` algorithm.
-The modular design means you can plug in your analytics without modifying the GUI structure.
-""")
+st.markdown("### 💾 Save Results")
+col1, col2 = st.columns(2)
+
+with col1:
+    if st.button("Save Degree Stats to MongoDB", disabled='degree_results' not in st.session_state):
+        try:
+            from utils import get_spark_connector
+            from analytics import DegreeAnalytics
+            
+            spark_conn = get_spark_connector()
+            degree_analytics = DegreeAnalytics(spark_conn)
+            degree_analytics.save_to_mongo(st.session_state['degree_results']['degree_stats_df'])
+            st.success("✅ Degree statistics saved!")
+        except Exception as e:
+            st.error(f"Error: {e}")
+
+with col2:
+    if st.button("Save Category Stats to MongoDB", disabled='category_results' not in st.session_state):
+        try:
+            from utils import get_spark_connector
+            from analytics import CategoryAnalytics
+            
+            spark_conn = get_spark_connector()
+            cat_analytics = CategoryAnalytics(spark_conn)
+            cat_analytics.save_to_mongo(st.session_state['category_results'])
+            st.success("✅ Category statistics saved!")
+        except Exception as e:
+            st.error(f"Error: {e}")
