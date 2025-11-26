@@ -1,171 +1,60 @@
 """
-Spark Connector with abstraction for different Spark configurations.
-Supports local, standalone cluster, and custom Spark setups without hardcoding.
+Simple Spark Connector for YouTube Analyzer.
+Connects to Spark with minimal configuration.
 """
 
-from typing import Optional, Dict, Any
-from abc import ABC, abstractmethod
-import logging
 import os
 import sys
-from pathlib import Path
+from typing import Optional, Dict, Any
+import logging
 from pyspark.sql import SparkSession
 import streamlit as st
-
-# Add parent directory to path for absolute imports
-if str(Path(__file__).parent.parent) not in sys.path:
-    sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from config import get_config
 
 logger = logging.getLogger(__name__)
 
 
-class SparkConfigurationStrategy(ABC):
-    """Abstract base class for Spark configuration strategies."""
-    
-    @abstractmethod
-    def configure_builder(
-        self,
-        builder: SparkSession.Builder,
-        settings: Dict[str, Any]
-    ) -> SparkSession.Builder:
-        """
-        Configure Spark session builder with strategy-specific settings.
-        
-        Args:
-            builder: SparkSession.Builder instance
-            settings: Strategy-specific settings
-            
-        Returns:
-            Configured SparkSession.Builder
-        """
-        pass
-
-
-class LocalSparkStrategy(SparkConfigurationStrategy):
-    """Strategy for local Spark sessions."""
-    
-    def configure_builder(
-        self,
-        builder: SparkSession.Builder,
-        settings: Dict[str, Any]
-    ) -> SparkSession.Builder:
-        master = settings.get('master', 'local[*]')
-        driver_memory = settings.get('driver_memory', '4g')
-        executor_memory = settings.get('executor_memory', '4g')
-        
-        return builder \
-            .master(master) \
-            .config("spark.driver.memory", driver_memory) \
-            .config("spark.executor.memory", executor_memory)
-
-
-class StandaloneSparkStrategy(SparkConfigurationStrategy):
-    """Strategy for standalone Spark cluster connections."""
-    
-    def configure_builder(
-        self,
-        builder: SparkSession.Builder,
-        settings: Dict[str, Any]
-    ) -> SparkSession.Builder:
-        master = settings.get('master', 'spark://localhost:7077')
-        driver_memory = settings.get('driver_memory', '4g')
-        executor_memory = settings.get('executor_memory', '4g')
-        executor_instances = settings.get('executor_instances', 2)
-        
-        return builder \
-            .master(master) \
-            .config("spark.driver.memory", driver_memory) \
-            .config("spark.executor.memory", executor_memory) \
-            .config("spark.executor.instances", executor_instances)
-
-
-class CustomSparkStrategy(SparkConfigurationStrategy):
-    """Strategy for custom Spark configurations."""
-    
-    def configure_builder(
-        self,
-        builder: SparkSession.Builder,
-        settings: Dict[str, Any]
-    ) -> SparkSession.Builder:
-        # Apply all settings from custom config
-        master = settings.get('master', 'local[*]')
-        builder = builder.master(master)
-        
-        # Apply any additional configs provided
-        for key, value in settings.items():
-            if key != 'master' and key.startswith('spark.'):
-                builder = builder.config(key, value)
-            elif key == 'driver_memory':
-                builder = builder.config("spark.driver.memory", value)
-            elif key == 'executor_memory':
-                builder = builder.config("spark.executor.memory", value)
-        
-        return builder
-
-
 class SparkConnector:
-    """
-    Spark connector with support for multiple configuration strategies.
-    Provides abstraction layer between GUI and Spark sessions.
-    """
+    """Simple Spark connector for the application."""
     
-    STRATEGIES = {
-        'local': LocalSparkStrategy(),
-        'standalone': StandaloneSparkStrategy(),
-        'custom': CustomSparkStrategy()
-    }
-    
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, mongo_uri: Optional[str] = None):
         """
         Initialize Spark connector.
         
         Args:
-            config: Optional configuration dictionary. If None, loads from config file.
+            mongo_uri: MongoDB URI for Spark-MongoDB integration
         """
-        if config is None:
-            config_loader = get_config()
-            config = config_loader.get_spark_config()
+        self.app_name = 'YouTube Analytics'
+        self.connection_type = 'local'
         
-        self.config = config
-        self.connection_type = config['connection_type']
-        self.app_name = config['app_name']
-        
-        # Get appropriate strategy
-        self.strategy = self.STRATEGIES.get(self.connection_type)
-        if not self.strategy:
-            raise ValueError(f"Unknown Spark connection type: {self.connection_type}")
+        # Get MongoDB URI
+        if mongo_uri is None:
+            mongo_uri = os.environ.get('MONGODB_URI', 'mongodb://localhost:27017/')
+        self.mongo_uri = mongo_uri
         
         # Spark session will be initialized on first use (lazy loading)
         self._spark: Optional[SparkSession] = None
         
         # Set up environment variables
-        self._setup_environment(config.get('environment', {}))
+        self._setup_environment()
         
-        logger.info(f"Spark connector initialized with {self.connection_type} strategy")
+        logger.info(f"Spark connector initialized")
     
-    def _setup_environment(self, env_config: Dict[str, Any]):
+    def _setup_environment(self):
         """Set up environment variables for Spark."""
-        # Java Home
-        if 'JAVA_HOME' in env_config and env_config['JAVA_HOME']:
-            os.environ['JAVA_HOME'] = env_config['JAVA_HOME']
-            logger.info(f"Set JAVA_HOME to {env_config['JAVA_HOME']}")
+        # Set Python executables for PySpark
+        os.environ['PYSPARK_PYTHON'] = sys.executable
+        os.environ['PYSPARK_DRIVER_PYTHON'] = sys.executable
         
-        # Hadoop Home
-        if 'HADOOP_HOME' in env_config and env_config['HADOOP_HOME']:
-            os.environ['HADOOP_HOME'] = env_config['HADOOP_HOME']
-            logger.info(f"Set HADOOP_HOME to {env_config['HADOOP_HOME']}")
+        # Set Java/Hadoop homes if not already set (use env vars or defaults)
+        if 'JAVA_HOME' not in os.environ:
+            default_java = r'C:\Program Files\Java\jdk-17'
+            if os.path.exists(default_java):
+                os.environ['JAVA_HOME'] = default_java
         
-        # PySpark Python executables
-        python_executable = env_config.get('PYSPARK_PYTHON') or sys.executable
-        driver_python = env_config.get('PYSPARK_DRIVER_PYTHON') or sys.executable
-        
-        # Force set these environment variables (don't use setdefault)
-        os.environ['PYSPARK_PYTHON'] = python_executable
-        os.environ['PYSPARK_DRIVER_PYTHON'] = driver_python
-        logger.info(f"Set PYSPARK_PYTHON to {python_executable}")
-        logger.info(f"Set PYSPARK_DRIVER_PYTHON to {driver_python}")
+        if 'HADOOP_HOME' not in os.environ:
+            default_hadoop = r'C:\hadoop'
+            if os.path.exists(default_hadoop):
+                os.environ['HADOOP_HOME'] = default_hadoop
     
     @property
     def spark(self) -> SparkSession:
@@ -177,59 +66,33 @@ class SparkConnector:
     def _create_session(self):
         """Create Spark session with configured settings."""
         try:
-            logger.info(f"Creating Spark session using {self.connection_type} strategy...")
+            logger.info("Creating Spark session...")
             
-            # Start with base builder
-            builder = SparkSession.builder.appName(self.app_name)
-            
-            # Apply strategy-specific configuration
-            builder = self.strategy.configure_builder(
-                builder,
-                self.config['settings']
+            # Build Spark session
+            builder = (SparkSession.builder
+                .appName(self.app_name)
+                .master('local[*]')
+                .config("spark.driver.memory", "4g")
+                .config("spark.executor.memory", "4g")
+                .config("spark.sql.shuffle.partitions", "8")
+                .config("spark.sql.adaptive.enabled", "true")
+                .config("spark.driver.host", "localhost")
+                .config("spark.driver.bindAddress", "localhost")
+                .config("spark.jars.packages", 
+                    "org.mongodb.spark:mongo-spark-connector_2.12:10.5.0,"
+                    "graphframes:graphframes:0.8.4-spark3.5-s_2.12")
+                .config("spark.pyspark.python", sys.executable)
+                .config("spark.pyspark.driver.python", sys.executable)
+                .config("spark.sql.execution.arrow.pyspark.enabled", "false")
+                .config("spark.mongodb.input.uri", self.mongo_uri)
+                .config("spark.mongodb.output.uri", self.mongo_uri)
             )
-            
-            # Add Spark packages (MongoDB connector, GraphFrames, etc.)
-            packages = self.config.get('packages', [])
-            if packages:
-                packages_str = ','.join(packages)
-                builder = builder.config("spark.jars.packages", packages_str)
-                logger.info(f"Loading packages: {packages_str}")
-            
-            # Add additional Spark configurations
-            additional_conf = self.config.get('conf', {})
-            for key, value in additional_conf.items():
-                builder = builder.config(key, value)
-            
-            # Add Python paths to Spark config for better debugging
-            builder = builder.config("spark.pyspark.python", os.environ.get('PYSPARK_PYTHON', sys.executable))
-            builder = builder.config("spark.pyspark.driver.python", os.environ.get('PYSPARK_DRIVER_PYTHON', sys.executable))
-            
-            # Disable Arrow optimization which can cause Python worker crashes with Python 3.12
-            builder = builder.config("spark.sql.execution.arrow.pyspark.enabled", "false")
-            builder = builder.config("spark.sql.execution.arrow.pyspark.fallback.enabled", "true")
-            
-            # Add MongoDB connection URI if available
-            mongo_config = get_config().get_mongodb_config()
-            # This allows Spark to read directly from MongoDB
-            mongo_connector = None
-            try:
-                from .mongo_connector import get_mongo_connector
-                mongo_connector = get_mongo_connector()
-                builder = builder.config("spark.mongodb.input.uri", mongo_connector.uri)
-                builder = builder.config("spark.mongodb.output.uri", mongo_connector.uri)
-                logger.info("MongoDB URI configured for Spark")
-            except Exception as e:
-                logger.warning(f"Could not configure MongoDB URI for Spark: {e}")
             
             # Create the session
             self._spark = builder.getOrCreate()
-            
-            # Set log level to reduce noise
             self._spark.sparkContext.setLogLevel("WARN")
             
-            logger.info("Spark session created successfully")
-            logger.info(f"Spark version: {self._spark.version}")
-            logger.info(f"Spark master: {self._spark.sparkContext.master}")
+            logger.info(f"Spark session created (version {self._spark.version})")
             
         except Exception as e:
             logger.error(f"Failed to create Spark session: {e}")
@@ -301,22 +164,19 @@ class SparkConnector:
     def load_collection_from_mongo(
         self,
         collection_name: str,
-        database: Optional[str] = None
+        database: str = 'youtube_analytics'
     ):
         """
         Load a MongoDB collection into a Spark DataFrame.
         
         Args:
             collection_name: Name of the collection to load
-            database: Database name (uses config default if None)
+            database: Database name (defaults to youtube_analytics)
             
         Returns:
             Spark DataFrame
         """
         try:
-            if database is None:
-                database = get_config().get_mongodb_config()['database']
-            
             logger.info(f"Loading collection {collection_name} from MongoDB...")
             
             df = self.spark.read \

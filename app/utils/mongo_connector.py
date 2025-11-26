@@ -1,140 +1,42 @@
 """
-MongoDB Connector with abstraction for different connection methods.
-Supports local, Atlas, and custom MongoDB connections without hardcoding.
+Simple MongoDB Connector for YouTube Analyzer.
+Connects to MongoDB with minimal configuration.
 """
 
+import os
 from typing import Optional, Dict, Any, List
-from abc import ABC, abstractmethod
 import logging
-import sys
-from pathlib import Path
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 import streamlit as st
 
-# Add parent directory to path for absolute imports
-if str(Path(__file__).parent.parent) not in sys.path:
-    sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from config import get_config
-
 logger = logging.getLogger(__name__)
 
 
-class MongoDBConnectionStrategy(ABC):
-    """Abstract base class for MongoDB connection strategies."""
-    
-    @abstractmethod
-    def get_connection_uri(self, settings: Dict[str, Any]) -> str:
-        """Build MongoDB connection URI from settings."""
-        pass
-    
-    @abstractmethod
-    def get_connection_options(self, options: Dict[str, Any]) -> Dict[str, Any]:
-        """Get connection options for MongoClient."""
-        pass
-
-
-class LocalMongoDBStrategy(MongoDBConnectionStrategy):
-    """Strategy for local MongoDB connections."""
-    
-    def get_connection_uri(self, settings: Dict[str, Any]) -> str:
-        host = settings.get('host', 'localhost')
-        port = settings.get('port', 27017)
-        username = settings.get('username')
-        password = settings.get('password')
-        
-        if username and password:
-            return f"mongodb://{username}:{password}@{host}:{port}/"
-        else:
-            return f"mongodb://{host}:{port}/"
-    
-    def get_connection_options(self, options: Dict[str, Any]) -> Dict[str, Any]:
-        return {
-            'serverSelectionTimeoutMS': options.get('serverSelectionTimeoutMS', 5000),
-            'connectTimeoutMS': options.get('connectTimeoutMS', 10000)
-        }
-
-
-class AtlasMongoDBStrategy(MongoDBConnectionStrategy):
-    """Strategy for MongoDB Atlas (cloud) connections."""
-    
-    def get_connection_uri(self, settings: Dict[str, Any]) -> str:
-        # Check if using environment variable
-        if 'connection_string_env' in settings:
-            import os
-            env_var = settings['connection_string_env']
-            uri = os.environ.get(env_var)
-            if not uri:
-                raise ValueError(f"Environment variable {env_var} not set for MongoDB Atlas connection")
-            return uri
-        
-        # Use directly provided connection string
-        return settings.get('connection_string', '')
-    
-    def get_connection_options(self, options: Dict[str, Any]) -> Dict[str, Any]:
-        return {
-            'serverSelectionTimeoutMS': options.get('serverSelectionTimeoutMS', 10000),
-            'connectTimeoutMS': options.get('connectTimeoutMS', 20000),
-            'retryWrites': True
-        }
-
-
-class CustomMongoDBStrategy(MongoDBConnectionStrategy):
-    """Strategy for custom MongoDB connections (e.g., specific IPs, custom setups)."""
-    
-    def get_connection_uri(self, settings: Dict[str, Any]) -> str:
-        return settings.get('uri', 'mongodb://localhost:27017/')
-    
-    def get_connection_options(self, options: Dict[str, Any]) -> Dict[str, Any]:
-        return {
-            'serverSelectionTimeoutMS': options.get('serverSelectionTimeoutMS', 5000),
-            'connectTimeoutMS': options.get('connectTimeoutMS', 10000)
-        }
-
-
 class MongoDBConnector:
-    """
-    MongoDB connector with support for multiple connection strategies.
-    Provides abstraction layer between GUI and database.
-    """
+    """Simple MongoDB connector for the application."""
     
-    STRATEGIES = {
-        'local': LocalMongoDBStrategy(),
-        'atlas': AtlasMongoDBStrategy(),
-        'custom': CustomMongoDBStrategy()
-    }
-    
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, uri: Optional[str] = None, database: str = 'youtube_analytics'):
         """
         Initialize MongoDB connector.
         
         Args:
-            config: Optional configuration dictionary. If None, loads from config file.
+            uri: MongoDB connection URI (defaults to localhost or MONGODB_URI env var)
+            database: Database name
         """
-        if config is None:
-            config_loader = get_config()
-            config = config_loader.get_mongodb_config()
+        # Get URI from parameter, environment variable, or default to localhost
+        if uri is None:
+            uri = os.environ.get('MONGODB_URI', 'mongodb://localhost:27017/')
         
-        self.config = config
-        self.connection_type = config['connection_type']
-        self.database_name = config['database']
-        self.collections = config.get('collections', [])
-        
-        # Get appropriate strategy
-        self.strategy = self.STRATEGIES.get(self.connection_type)
-        if not self.strategy:
-            raise ValueError(f"Unknown connection type: {self.connection_type}")
-        
-        # Build connection URI and options
-        self.uri = self.strategy.get_connection_uri(config['settings'])
-        self.options = self.strategy.get_connection_options(config.get('options', {}))
+        self.uri = uri
+        self.database_name = database
+        self.connection_type = 'atlas' if 'mongodb.net' in uri or 'mongodb+srv' in uri else 'local'
         
         # Client will be initialized on first use (lazy loading)
         self._client: Optional[MongoClient] = None
         self._db = None
         
-        logger.info(f"MongoDB connector initialized with {self.connection_type} strategy")
+        logger.info(f"MongoDB connector initialized ({self.connection_type})")
     
     @property
     def client(self) -> MongoClient:
@@ -153,8 +55,12 @@ class MongoDBConnector:
     def _connect(self):
         """Establish MongoDB connection."""
         try:
-            logger.info(f"Connecting to MongoDB using {self.connection_type} strategy...")
-            self._client = MongoClient(self.uri, **self.options)
+            logger.info(f"Connecting to MongoDB ({self.connection_type})...")
+            self._client = MongoClient(
+                self.uri,
+                serverSelectionTimeoutMS=5000,
+                connectTimeoutMS=10000
+            )
             # Test connection
             self._client.admin.command('ping')
             logger.info("MongoDB connection established successfully")

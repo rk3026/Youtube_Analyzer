@@ -129,16 +129,17 @@ with col2:
             info = spark_conn.get_session_info()
             test = spark_conn.test_connection()
             
-            if info['status'] == 'active' and test['test_passed']:
+            if test.get('test_passed', False):
                 st.success("✅ Active")
                 st.info(f"""
-                **Connection Type:** {info['connection_type']}  
-                **Spark Version:** {info['spark_version']}  
-                **Master:** {info['master']}  
-                **Parallelism:** {info['default_parallelism']}
+                **Connection Type:** {info.get('connection_type', 'unknown')}  
+                **Spark Version:** {info.get('spark_version', 'unknown')}  
+                **Master:** {info.get('master', 'unknown')}  
+                **Parallelism:** {info.get('default_parallelism', 'unknown')}
                 """)
             else:
-                st.error(f"❌ Session Issue: {test.get('error', 'Unknown error')}")
+                error_msg = test.get('error', info.get('error', 'Session initialization failed'))
+                st.error(f"❌ Session Issue: {error_msg}")
         except Exception as e:
             st.error(f"❌ Error: {str(e)}")
             logger.error(f"Spark connection error: {e}")
@@ -229,8 +230,9 @@ with st.expander("📖 How to Use This Application"):
     6. **Settings** - Configure MongoDB and Spark connections
     
     #### Configuration
-    - The application uses configuration from `.env` files and environment variables
-    - Use environment variables to customize your setup if needed
+    - Set `MONGODB_URI` environment variable to configure MongoDB connection
+    - Default: `mongodb://localhost:27017/` 
+    - Spark runs in local mode with 4GB memory
     
     #### Performance Tips
     - Start with smaller sample sizes for faster results
@@ -241,7 +243,7 @@ with st.expander("📖 How to Use This Application"):
     If you encounter connection issues:
     1. Check MongoDB is running and accessible
     2. Verify Java 17 is installed for Spark
-    3. Review configuration in `.env` file or environment variables
+    3. Set `MONGODB_URI` environment variable if using remote MongoDB
     4. Check the logs for detailed error messages
     """)
 
@@ -249,52 +251,49 @@ with st.expander("⚙️ Configuration Details"):
     st.markdown("""
     #### Current Configuration
     
-    The application is using settings from `.env` files and environment variables.
+    The application uses simple environment variables for configuration.
     
     **MongoDB Configuration:**
-    - Connection type determined by environment variables
-    - Supports local, Atlas, and custom connections
-    - Database and collections specified in code defaults
+    - Set `MONGODB_URI` environment variable (default: `mongodb://localhost:27017/`)
+    - Database: `youtube_analytics`
     
     **Spark Configuration:**
-    - Connection type determined by SPARK_MASTER environment variable
-    - Supports local mode, standalone cluster, and custom setups
-    - Memory and parallelism settings in code defaults
+    - Runs in local mode: `local[*]`
+    - Memory: 4GB driver and executor
+    - Includes MongoDB connector and GraphFrames packages
     
     **To modify settings:**
-    1. Create a `.env` file (copy from .env.example)
-    2. Or set environment variables (MONGODB_URI, SPARK_MASTER, etc.)
-    3. Restart the application to apply changes
+    1. Set the `MONGODB_URI` environment variable to your MongoDB connection string
+    2. Restart the application to apply changes
     """)
     
     # Show current active configuration
     try:
-        from config import get_config
-        config = get_config()
+        import os
+        mongo = get_mongo_connector()
+        spark_conn = get_spark_connector()
         
         st.markdown("**Active MongoDB Config:**")
-        mongo_cfg = config.get_mongodb_config()
         st.json({
-            'connection_type': mongo_cfg['connection_type'],
-            'database': mongo_cfg['database'],
-            'collections': mongo_cfg['collections']
+            'connection_type': mongo.connection_type,
+            'database': mongo.database_name,
+            'uri': '***' if 'password' in mongo.uri or '@' in mongo.uri else mongo.uri
         })
         
         st.markdown("**Active Spark Config:**")
-        spark_cfg = config.get_spark_config()
         st.json({
-            'connection_type': spark_cfg['connection_type'],
-            'app_name': spark_cfg['app_name'],
-            'packages': spark_cfg['packages'][:2] + ['...']  # Show first 2 packages
+            'connection_type': spark_conn.connection_type,
+            'app_name': spark_conn.app_name,
+            'master': 'local[*]'
         })
     except Exception as e:
-        st.warning("Could not load configuration details")
+        st.warning(f"Could not load configuration details: {e}")
 
 # Footer
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 2rem;'>
-    <p><strong>YouTube Network Analyzer</strong> | CPTS 415 Big Data Project | Milestone 4</p>
+    <p><strong>YouTube Network Analyzer</strong> | CPTS 415 Big Data Project</p>
     <p>Built with Streamlit, PySpark, and MongoDB</p>
 </div>
 """, unsafe_allow_html=True)
