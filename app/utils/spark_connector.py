@@ -64,20 +64,58 @@ class SparkConnector:
         return self._spark
     
     def _create_session(self):
-        """Create Spark session with configured settings."""
+        """Create Spark session with local clustering for scalability."""
         try:
-            logger.info("Creating Spark session...")
+            logger.info("Creating Spark session with local clustering...")
             
-            # Build Spark session
+            # Detect available CPU cores for optimal parallelism
+            import multiprocessing
+            num_cores = multiprocessing.cpu_count()
+            # Use all cores minus 1 to keep system responsive
+            worker_cores = max(1, num_cores - 1)
+            
+            logger.info(f"Detected {num_cores} CPU cores, using {worker_cores} for Spark")
+            
+            # Build Spark session with clustering optimizations
             builder = (SparkSession.builder
                 .appName(self.app_name)
-                .master('local[*]')
+                # Use all available cores for parallel processing
+                .master(f'local[{worker_cores}]')
+                
+                # Memory configuration for clustering
                 .config("spark.driver.memory", "4g")
                 .config("spark.executor.memory", "4g")
-                .config("spark.sql.shuffle.partitions", "8")
+                .config("spark.memory.fraction", "0.8")  # 80% of heap for execution/storage
+                .config("spark.memory.storageFraction", "0.3")  # 30% for cached data
+                
+                # Parallelism and partitioning for scalability
+                .config("spark.default.parallelism", str(worker_cores * 2))
+                .config("spark.sql.shuffle.partitions", str(worker_cores * 4))
                 .config("spark.sql.adaptive.enabled", "true")
+                .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
+                .config("spark.sql.adaptive.skewJoin.enabled", "true")
+                
+                # Optimize shuffle for local clustering
+                .config("spark.shuffle.compress", "true")
+                .config("spark.shuffle.spill.compress", "true")
+                .config("spark.io.compression.codec", "snappy")
+                
+                # Dynamic resource allocation
+                .config("spark.dynamicAllocation.enabled", "false")  # Not needed in local mode
+                .config("spark.speculation", "true")  # Re-launch slow tasks
+                .config("spark.speculation.multiplier", "1.5")
+                
+                # Network and execution settings
                 .config("spark.driver.host", "localhost")
                 .config("spark.driver.bindAddress", "localhost")
+                .config("spark.network.timeout", "600s")
+                .config("spark.executor.heartbeatInterval", "60s")
+                
+                # Optimize for large datasets
+                .config("spark.sql.files.maxPartitionBytes", "134217728")  # 128MB per partition
+                .config("spark.sql.autoBroadcastJoinThreshold", "10485760")  # 10MB broadcast threshold
+                
+                # MongoDB and package configuration
                 .config("spark.jars.packages", 
                     "org.mongodb.spark:mongo-spark-connector_2.12:10.5.0,"
                     "graphframes:graphframes:0.8.4-spark3.5-s_2.12")
@@ -86,13 +124,22 @@ class SparkConnector:
                 .config("spark.sql.execution.arrow.pyspark.enabled", "false")
                 .config("spark.mongodb.input.uri", self.mongo_uri)
                 .config("spark.mongodb.output.uri", self.mongo_uri)
+                
+                # MongoDB read optimizations for clustering
+                .config("spark.mongodb.input.partitioner", "MongoSamplePartitioner")
+                .config("spark.mongodb.input.partitionerOptions.partitionSizeMB", "64")
+                .config("spark.mongodb.input.partitionerOptions.samplesPerPartition", "10")
             )
             
             # Create the session
             self._spark = builder.getOrCreate()
             self._spark.sparkContext.setLogLevel("WARN")
             
+            sc = self._spark.sparkContext
             logger.info(f"Spark session created (version {self._spark.version})")
+            logger.info(f"Master: {sc.master}")
+            logger.info(f"Default parallelism: {sc.defaultParallelism}")
+            logger.info(f"Configured for scalable local clustering with {worker_cores} cores")
             
         except Exception as e:
             logger.error(f"Failed to create Spark session: {e}")
