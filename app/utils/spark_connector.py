@@ -108,8 +108,10 @@ class SparkConnector:
                 # Network and execution settings
                 .config("spark.driver.host", "localhost")
                 .config("spark.driver.bindAddress", "localhost")
-                .config("spark.network.timeout", "600s")
-                .config("spark.executor.heartbeatInterval", "60s")
+                .config("spark.network.timeout", "800s")
+                .config("spark.executor.heartbeatInterval", "120s")
+                .config("spark.sql.broadcastTimeout", "600s")
+                .config("spark.rpc.askTimeout", "600s")
                 
                 # Optimize for large datasets
                 .config("spark.sql.files.maxPartitionBytes", "134217728")  # 128MB per partition
@@ -232,7 +234,8 @@ class SparkConnector:
                 .option("collection", collection_name) \
                 .load()
             
-            logger.info(f"Loaded {collection_name}: {df.count()} rows")
+            # Don't call count() here - it's expensive and causes timeouts
+            logger.info(f"Loaded collection {collection_name} (lazy evaluation)")
             return df
             
         except Exception as e:
@@ -258,38 +261,32 @@ _spark_connector: Optional[SparkConnector] = None
 
 
 @st.cache_resource
-def get_spark_session(reload: bool = False) -> SparkSession:
+def get_spark_session(_reload: bool = False) -> SparkSession:
     """
     Get the global Spark session (cached in Streamlit).
     
-    Args:
-        reload: If True, recreate the Spark session
-        
+    Uses Streamlit's cache_resource to ensure single instance across reruns.
+    
     Returns:
         SparkSession instance
     """
-    global _spark_connector
-    
-    if _spark_connector is None or reload:
-        _spark_connector = SparkConnector()
-    
-    return _spark_connector.spark
+    connector = get_spark_connector()
+    return connector.spark
 
 
 @st.cache_resource
-def get_spark_connector(reload: bool = False) -> SparkConnector:
+def get_spark_connector(_reload: bool = False) -> SparkConnector:
     """
     Get the global Spark connector instance (cached in Streamlit).
     
-    Args:
-        reload: If True, recreate the connector
-        
+    Uses Streamlit's cache_resource to ensure single instance across reruns.
+    The _reload parameter is prefixed with underscore to prevent it from
+    affecting the cache key.
+    
     Returns:
         SparkConnector instance
     """
-    global _spark_connector
-    
-    if _spark_connector is None or reload:
-        _spark_connector = SparkConnector()
-    
-    return _spark_connector
+    # Create a new connector - Streamlit's cache_resource ensures this
+    # only runs once and reuses the same instance across reruns
+    connector = SparkConnector()
+    return connector
