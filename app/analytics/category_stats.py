@@ -45,6 +45,7 @@ class CategoryAnalytics:
             .groupBy("category")
             .agg(count("*").alias("num_videos"))
             .orderBy(desc("num_videos"))
+            .limit(15)  # Get top 15 categories
             .collect()
         )
         
@@ -55,7 +56,7 @@ class CategoryAnalytics:
                 'count': int(row['num_videos'])
             })
         
-        logger.info(f"Found {len(results)} categories")
+        logger.info(f"Found top {len(results)} categories")
         return results
     
     def compute_length_distribution(self, videos: DataFrame) -> list:
@@ -176,10 +177,22 @@ class CategoryAnalytics:
                 videos = videos.sample(withReplacement=False, fraction=fraction)
                 logger.info(f"Sampled {sample_size:,} videos from {total_videos:,} total")
         
-        # Compute distributions
+        # Compute distributions from videos collection
         category_dist = self.compute_category_distribution(videos)
         length_dist = self.compute_length_distribution(videos)
-        view_dist = self.compute_view_distribution(videos)
+        
+        # Load video_snapshots for view data (has 'views' field)
+        try:
+            snapshots = self.spark_connector.load_collection_from_mongo('video_snapshots')
+            if sample_size:
+                total_snapshots = snapshots.count()
+                if sample_size < total_snapshots:
+                    fraction = sample_size / total_snapshots
+                    snapshots = snapshots.sample(withReplacement=False, fraction=fraction)
+            view_dist = self.compute_view_distribution(snapshots)
+        except Exception as e:
+            logger.warning(f"Could not load video_snapshots for view data: {e}")
+            view_dist = []
         
         return {
             'by_category': category_dist,
