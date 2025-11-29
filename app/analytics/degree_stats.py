@@ -43,9 +43,9 @@ class DegreeAnalytics:
             .agg(count("*").alias("outDegree"))
         )
         
+        # Cache for reuse but don't count here - it's expensive
         out_degrees.cache()
-        count_val = out_degrees.count()
-        logger.info(f"Computed out-degrees for {count_val:,} vertices")
+        logger.info("Out-degrees computed (cached)")
         
         return out_degrees
     
@@ -68,9 +68,9 @@ class DegreeAnalytics:
             .agg(count("*").alias("inDegree"))
         )
         
+        # Cache for reuse but don't count here - it's expensive
         in_degrees.cache()
-        count_val = in_degrees.count()
-        logger.info(f"Computed in-degrees for {count_val:,} vertices")
+        logger.info("In-degrees computed (cached)")
         
         return in_degrees
     

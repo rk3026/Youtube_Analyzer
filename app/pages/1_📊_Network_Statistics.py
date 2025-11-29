@@ -48,7 +48,7 @@ with tab1:
             help="Number of edges to sample for analysis"
         )
     with col2:
-        run_analysis = st.button("🔄 Run Analysis", use_container_width=True, type="primary")
+        run_analysis = st.button("🔄 Run Analysis", width="stretch", type="primary")
     
     if run_analysis:
         with st.spinner("Computing degree statistics..."):
@@ -139,7 +139,7 @@ with tab2:
             key="cat_sample"
         )
     with col2:
-        run_cat_analysis = st.button("🔄 Run Analysis", use_container_width=True, type="primary", key="cat_run")
+        run_cat_analysis = st.button("🔄 Run Analysis", width="stretch", type="primary", key="cat_run")
     
     if run_cat_analysis:
         with st.spinner("Computing categorized statistics..."):
@@ -217,31 +217,129 @@ with tab2:
         st.info("👆 Click 'Run Analysis' to compute categorized statistics")
 
 st.markdown("---")
-st.markdown("### 💾 Save Results")
+st.markdown("### 💾 Save Results to Archives")
+st.markdown("Save your analysis results to the `youtube_analytics_archives` database with timestamps.")
+
 col1, col2 = st.columns(2)
 
 with col1:
     if st.button("Save Degree Stats to MongoDB", disabled='degree_results' not in st.session_state):
         try:
-            from utils import get_spark_connector
-            from analytics import DegreeAnalytics
+            from utils import get_mongo_connector
+            from datetime import datetime
             
-            spark_conn = get_spark_connector()
-            degree_analytics = DegreeAnalytics(spark_conn)
-            degree_analytics.save_to_mongo(st.session_state['degree_results']['degree_stats_df'])
-            st.success("✅ Degree statistics saved!")
+            mongo = get_mongo_connector()
+            results = st.session_state['degree_results']
+            
+            # Get archives database
+            archives_db = mongo.client['youtube_analytics_archives']
+            
+            # Create timestamp for collection names
+            now = datetime.now()
+            date_str = now.strftime("%m-%d-%Y")
+            time_str = now.strftime("%H:%M:%S")
+            timestamp_str = now.strftime("%m-%d-%Y_%H-%M-%S")
+            
+            # Get sample size from session or use default
+            edges_count = results['aggregate_stats'].get('num_vertices', 'unknown')
+            
+            # Save aggregate stats
+            agg_collection_name = f"degree_aggregate_stats_{timestamp_str}_{edges_count}_vertices"
+            agg_collection = archives_db[agg_collection_name]
+            agg_collection.insert_one({
+                'type': 'aggregate_statistics',
+                'created_date': date_str,
+                'created_time': time_str,
+                'sample_size': sample_size,
+                **results['aggregate_stats']
+            })
+            
+            # Save top videos
+            top_collection_name = f"degree_top_videos_{timestamp_str}_{edges_count}_vertices"
+            top_collection = archives_db[top_collection_name]
+            if results['top_videos']:
+                for video in results['top_videos']:
+                    video['created_date'] = date_str
+                    video['created_time'] = time_str
+                top_collection.insert_many(results['top_videos'])
+            
+            # Save distribution
+            dist_collection_name = f"degree_distribution_{timestamp_str}_{edges_count}_vertices"
+            dist_collection = archives_db[dist_collection_name]
+            if results['distribution']:
+                for dist in results['distribution']:
+                    dist['created_date'] = date_str
+                    dist['created_time'] = time_str
+                dist_collection.insert_many(results['distribution'])
+            
+            st.success(f"✅ Degree statistics saved to `youtube_analytics_archives`!")
+            st.info(f"""
+            **Saved Collections:**
+            - `{agg_collection_name}`
+            - `{top_collection_name}`
+            - `{dist_collection_name}`
+            """)
+            logger.info(f"Degree statistics saved to youtube_analytics_archives at {date_str} {time_str}")
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Error saving degree stats: {e}")
+            logger.error(f"Error saving degree stats: {e}", exc_info=True)
 
 with col2:
     if st.button("Save Category Stats to MongoDB", disabled='category_results' not in st.session_state):
         try:
-            from utils import get_spark_connector
-            from analytics import CategoryAnalytics
+            from utils import get_mongo_connector
+            from datetime import datetime
             
-            spark_conn = get_spark_connector()
-            cat_analytics = CategoryAnalytics(spark_conn)
-            cat_analytics.save_to_mongo(st.session_state['category_results'])
-            st.success("✅ Category statistics saved!")
+            mongo = get_mongo_connector()
+            results = st.session_state['category_results']
+            
+            # Get archives database
+            archives_db = mongo.client['youtube_analytics_archives']
+            
+            # Create timestamp for collection names
+            now = datetime.now()
+            date_str = now.strftime("%m-%d-%Y")
+            time_str = now.strftime("%H:%M:%S")
+            timestamp_str = now.strftime("%m-%d-%Y_%H-%M-%S")
+            
+            saved_collections = []
+            
+            # Save category distribution
+            if results['by_category']:
+                cat_collection_name = f"category_distribution_{timestamp_str}_{cat_sample_size}_videos"
+                cat_collection = archives_db[cat_collection_name]
+                for cat in results['by_category']:
+                    cat['created_date'] = date_str
+                    cat['created_time'] = time_str
+                cat_collection.insert_many(results['by_category'])
+                saved_collections.append(cat_collection_name)
+            
+            # Save length distribution
+            if results['by_length']:
+                len_collection_name = f"length_distribution_{timestamp_str}_{cat_sample_size}_videos"
+                len_collection = archives_db[len_collection_name]
+                for length in results['by_length']:
+                    length['created_date'] = date_str
+                    length['created_time'] = time_str
+                len_collection.insert_many(results['by_length'])
+                saved_collections.append(len_collection_name)
+            
+            # Save view distribution
+            if results['by_views']:
+                view_collection_name = f"view_distribution_{timestamp_str}_{cat_sample_size}_videos"
+                view_collection = archives_db[view_collection_name]
+                for view in results['by_views']:
+                    view['created_date'] = date_str
+                    view['created_time'] = time_str
+                view_collection.insert_many(results['by_views'])
+                saved_collections.append(view_collection_name)
+            
+            st.success(f"✅ Category statistics saved to `youtube_analytics_archives`!")
+            st.info(f"""
+            **Saved Collections:**
+            {chr(10).join([f'- `{c}`' for c in saved_collections])}
+            """)
+            logger.info(f"Category statistics saved to youtube_analytics_archives at {date_str} {time_str}")
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Error saving category stats: {e}")
+            logger.error(f"Error saving category stats: {e}", exc_info=True)
