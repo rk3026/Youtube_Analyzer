@@ -71,8 +71,6 @@ st.markdown("""
 st.markdown('<div class="main-header">📺 YouTube Network Analyzer</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">Big Data Analytics Platform for YouTube Video Networks</div>', unsafe_allow_html=True)
 
-# Sidebar is intentionally left to Streamlit's default page navigation
-
 # Main content
 st.markdown("## 🏠 Welcome")
 
