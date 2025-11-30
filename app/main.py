@@ -26,9 +26,6 @@ from components import (
     render_connection_status,
     render_dataset_overview,
     render_visual_analytics,
-    render_network_metrics,
-    render_graph_visualization,
-    render_quick_actions,
     render_instructions
 )
 from utils import get_mongo_connector
@@ -74,21 +71,7 @@ st.markdown("""
 st.markdown('<div class="main-header">📺 YouTube Network Analyzer</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">Big Data Analytics Platform for YouTube Video Networks</div>', unsafe_allow_html=True)
 
-# Sidebar
-with st.sidebar:
-    st.markdown("### 📺 YouTube Analytics Hub")
-    st.markdown("---")
-    st.markdown("""
-    **Available Features:**
-    
-    - 🏠 **Home** - Overview and connection status
-    - 📊 **Network Statistics** - Degree distribution and metrics
-    - 🔍 **Top-K Queries** - Most popular videos and categories
-    - 🎯 **Range Queries** - Filter videos by criteria
-    - 🕸️ **Pattern Search** - Find network patterns
-    - 💡 **Influence Analysis** - PageRank and influence metrics
-    - ⚙️ **Settings** - Configure connections
-    """)
+# Sidebar is intentionally left to Streamlit's default page navigation
 
 # Main content
 st.markdown("## 🏠 Welcome")
@@ -108,22 +91,10 @@ try:
     # Visual Analytics Section
     st.markdown("---")
     render_visual_analytics(mongo)
-    
-    # Network Metrics Section
-    st.markdown("---")
-    render_network_metrics(mongo)
-    
-    # Graph Visualization Section
-    st.markdown("---")
-    render_graph_visualization(mongo)
 
 except Exception as e:
     st.warning("⚠️ Could not load dataset statistics. Please check your MongoDB connection.")
     logger.error(f"Error loading dataset overview: {e}")
-
-# Quick Actions
-st.markdown("---")
-render_quick_actions()
 
 # Instructions
 st.markdown("---")

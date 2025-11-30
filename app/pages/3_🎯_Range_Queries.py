@@ -12,6 +12,8 @@ from typing import Dict, Any, List
 import logging
 import sys
 from pathlib import Path
+from components import render_video_link
+from utils.youtube_helpers import youtube_url, short_youtube_url, add_youtube_links_to_df
 
 # Add parent directory to path for imports
 app_dir = Path(__file__).parent.parent
@@ -119,22 +121,36 @@ with tab1:
         if data:
             df = pd.DataFrame(data)
             df.index = range(1, len(df) + 1)
+            # Add URLs for quick access
+            if 'video_id' in df.columns:
+                df['url'] = df['video_id'].map(youtube_url)
+                df['short_url'] = df['video_id'].map(short_youtube_url)
+            # Add URLs for the results for quick links
+            if 'video_id' in df.columns:
+                df['url'] = df['video_id'].map(youtube_url)
+                df['short_url'] = df['video_id'].map(short_youtube_url)
             
             st.markdown(f"#### Results: {results['category']} videos ({results['min_duration']}-{results['max_duration']} sec)")
             
             col1, col2 = st.columns([1, 1])
             
             with col1:
-                st.dataframe(
-                    df[['video_id', 'duration_formatted', 'views', 'rating']],
-                    column_config={
-                        "video_id": "Video ID",
-                        "duration_formatted": "Duration",
-                        "views": st.column_config.NumberColumn("Views", format="%d"),
-                        "rating": st.column_config.NumberColumn("Rating", format="%.2f")
-                    },
-                    use_container_width=True
-                )
+                # Convert video_id column to clickable links and render as HTML table
+                if 'video_id' in df.columns:
+                    df['Video'] = df['video_id'].map(lambda v: f'<a href="{youtube_url(v)}" target="_blank">{v}</a>')
+                    display_df = df[['Video', 'duration_formatted', 'views', 'rating']].copy()
+                    display_df.columns = ['Video', 'Duration', 'Views', 'Rating']
+                    st.write(display_df.to_html(escape=False, index=False), unsafe_allow_html=True)
+                else:
+                    st.dataframe(
+                        df[['duration_formatted', 'views', 'rating']],
+                        column_config={
+                            "duration_formatted": "Duration",
+                            "views": st.column_config.NumberColumn("Views", format="%d"),
+                            "rating": st.column_config.NumberColumn("Rating", format="%.2f")
+                        },
+                        use_container_width=True
+                    )
             
             with col2:
                 fig = px.histogram(
@@ -242,18 +258,25 @@ with tab2:
             category_text = results['category'] if results['category'] != 'All Categories' else 'all categories'
             st.markdown(f"#### Results: Videos in {category_text} with {results['min_views']:,}-{results['max_views']:,} views")
             
-            st.dataframe(
-                df,
-                column_config={
-                    "video_id": "Video ID",
-                    "views": st.column_config.NumberColumn("Views", format="%d"),
-                    "rating": st.column_config.NumberColumn("Rating", format="%.2f"),
-                    "num_ratings": st.column_config.NumberColumn("# Ratings", format="%d"),
-                    "category": "Category",
-                    "duration_sec": st.column_config.NumberColumn("Duration (s)", format="%d")
-                },
-                use_container_width=True
-            )
+            # Convert video_id to clickable links in the results table
+            if 'video_id' in df.columns:
+                df['Video'] = df['video_id'].map(lambda v: f'<a href="{youtube_url(v)}" target="_blank">{v}</a>')
+                display_df = df.copy()
+                col_order = ['Video'] + [c for c in df.columns if c not in ['video_id', 'Video']]
+                display_df = display_df[col_order]
+                st.write(display_df.to_html(escape=False, index=False), unsafe_allow_html=True)
+            else:
+                st.dataframe(
+                    df,
+                    column_config={
+                        "views": st.column_config.NumberColumn("Views", format="%d"),
+                        "rating": st.column_config.NumberColumn("Rating", format="%.2f"),
+                        "num_ratings": st.column_config.NumberColumn("# Ratings", format="%d"),
+                        "category": "Category",
+                        "duration_sec": st.column_config.NumberColumn("Duration (s)", format="%d")
+                    },
+                    use_container_width=True
+                )
             
             col1, col2 = st.columns(2)
             

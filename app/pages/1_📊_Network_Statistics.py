@@ -11,6 +11,8 @@ from typing import Dict, Any
 import logging
 import sys
 from pathlib import Path
+from components import render_video_link
+from utils.youtube_helpers import youtube_url, short_youtube_url, add_youtube_links_to_df
 
 # Add parent directory to path for imports
 app_dir = Path(__file__).parent.parent
@@ -107,16 +109,22 @@ with tab1:
         if top_videos:
             df_top = pd.DataFrame(top_videos)
             df_top.index = range(1, len(df_top) + 1)
-            st.dataframe(
-                df_top,
-                column_config={
-                    "id": "Video ID",
-                    "total_degree": st.column_config.NumberColumn("Total Degree", format="%d"),
-                    "in_degree": st.column_config.NumberColumn("In-Degree", format="%d"),
-                    "out_degree": st.column_config.NumberColumn("Out-Degree", format="%d")
-                },
-                use_container_width=True
-            )
+            # Convert id column to clickable link and display as an HTML table (no extra UI sections)
+            if 'id' in df_top.columns:
+                df_top['Video'] = df_top['id'].map(lambda v: f'<a href="{youtube_url(v)}" target="_blank">{v}</a>')
+                display_df = df_top[['Video', 'total_degree', 'in_degree', 'out_degree']].copy()
+                display_df.columns = ['Video', 'Total Degree', 'In-Degree', 'Out-Degree']
+                st.write(display_df.to_html(escape=False, index=False), unsafe_allow_html=True)
+            else:
+                st.dataframe(
+                    df_top,
+                    column_config={
+                        "total_degree": st.column_config.NumberColumn("Total Degree", format="%d"),
+                        "in_degree": st.column_config.NumberColumn("In-Degree", format="%d"),
+                        "out_degree": st.column_config.NumberColumn("Out-Degree", format="%d")
+                    },
+                    use_container_width=True
+                )
         else:
             st.info("No top videos data available")
     else:

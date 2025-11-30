@@ -20,6 +20,7 @@ seaborn>=0.13.0
 
 # Graph Analysis
 networkx>=3.2.0
+scipy>=1.11.0
 
 # Configuration
 pyyaml>=6.0

@@ -12,6 +12,8 @@ from typing import Dict, Any, List
 import logging
 import sys
 from pathlib import Path
+from components import render_video_link
+from utils.youtube_helpers import youtube_url, short_youtube_url, add_youtube_links_to_df
 
 # Add parent directory to path for imports
 app_dir = Path(__file__).parent.parent
@@ -81,6 +83,13 @@ with tab1:
         if data:
             df = pd.DataFrame(data)
             df.index = range(1, len(df) + 1)
+            if 'video_id' in df.columns:
+                df['url'] = df['video_id'].map(youtube_url)
+                df['short_url'] = df['video_id'].map(short_youtube_url)
+            # attach URLs for quick access
+            if 'video_id' in df.columns:
+                df['url'] = df['video_id'].map(youtube_url)
+                df['short_url'] = df['video_id'].map(short_youtube_url)
             
             col1, col2 = st.columns([1, 1])
             
@@ -162,17 +171,25 @@ with tab2:
             df.index = range(1, len(df) + 1)
             
             st.markdown("#### Results Table")
-            st.dataframe(
-                df,
-                column_config={
-                    "video_id": "Video ID",
-                    "views": st.column_config.NumberColumn("Views", format="%d"),
-                    "category": "Category",
-                    "rating": st.column_config.NumberColumn("Rating", format="%.2f"),
-                    "num_ratings": st.column_config.NumberColumn("# Ratings", format="%d")
-                },
-                use_container_width=True
-            )
+            # Convert video_id column to a clickable link and render as an HTML table
+            if 'video_id' in df.columns:
+                df['Video'] = df['video_id'].map(lambda v: f'<a href="{youtube_url(v)}" target="_blank">{v}</a>')
+                display_df = df.copy()
+                # Rearrange columns to show a 'Video' link column first
+                col_order = ['Video'] + [c for c in df.columns if c not in ['video_id', 'Video']]
+                display_df = display_df[col_order]
+                st.write(display_df.to_html(escape=False, index=False), unsafe_allow_html=True)
+            else:
+                st.dataframe(
+                    df,
+                    column_config={
+                        "views": st.column_config.NumberColumn("Views", format="%d"),
+                        "category": "Category",
+                        "rating": st.column_config.NumberColumn("Rating", format="%.2f"),
+                        "num_ratings": st.column_config.NumberColumn("# Ratings", format="%d")
+                    },
+                    use_container_width=True
+                )
             
             st.markdown("#### Views Distribution")
             fig = px.bar(
@@ -185,6 +202,8 @@ with tab2:
             )
             fig.update_layout(xaxis_tickangle=-45)
             st.plotly_chart(fig, use_container_width=True)
+            # Quick Links and open selector
+            # No quick link UI; video IDs are clickable in the results table
         else:
             st.info("No view data found")
     else:
@@ -252,17 +271,23 @@ with tab3:
             df.index = range(1, len(df) + 1)
             
             st.markdown("#### Results Table")
-            st.dataframe(
-                df,
-                column_config={
-                    "video_id": "Video ID",
-                    "rating": st.column_config.NumberColumn("Rating", format="%.2f"),
-                    "num_ratings": st.column_config.NumberColumn("# Ratings", format="%d"),
-                    "views": st.column_config.NumberColumn("Views", format="%d"),
-                    "category": "Category"
-                },
-                use_container_width=True
-            )
+            if 'video_id' in df.columns:
+                df['Video'] = df['video_id'].map(lambda v: f'<a href="{youtube_url(v)}" target="_blank">{v}</a>')
+                display_df = df.copy()
+                col_order = ['Video'] + [c for c in df.columns if c not in ['video_id', 'Video']]
+                display_df = display_df[col_order]
+                st.write(display_df.to_html(escape=False, index=False), unsafe_allow_html=True)
+            else:
+                st.dataframe(
+                    df,
+                    column_config={
+                        "rating": st.column_config.NumberColumn("Rating", format="%.2f"),
+                        "num_ratings": st.column_config.NumberColumn("# Ratings", format="%d"),
+                        "views": st.column_config.NumberColumn("Views", format="%d"),
+                        "category": "Category"
+                    },
+                    use_container_width=True
+                )
             
             col1, col2 = st.columns(2)
             
@@ -292,6 +317,7 @@ with tab3:
                     labels={'views': 'Views', 'rating': 'Rating'}
                 )
                 st.plotly_chart(fig2, use_container_width=True)
+            # No quick links UI; video IDs are clickable in the results table
         else:
             st.info("No rated videos found with the specified criteria")
     else:

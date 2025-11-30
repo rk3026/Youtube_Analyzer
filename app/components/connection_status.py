@@ -11,7 +11,15 @@ logger = logging.getLogger(__name__)
 
 def render_connection_status():
     """Render MongoDB and Spark connection status."""
-    st.markdown("### Connection Status")
+    col_header, col_button = st.columns([4, 1])
+    
+    with col_header:
+        st.markdown("### Connection Status")
+    
+    with col_button:
+        if st.button("🔄 Refresh", type="primary", use_container_width=True):
+            st.cache_resource.clear()
+            st.rerun()
     
     col1, col2 = st.columns(2)
     

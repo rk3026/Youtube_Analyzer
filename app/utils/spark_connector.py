@@ -58,9 +58,19 @@ class SparkConnector:
     
     @property
     def spark(self) -> SparkSession:
-        """Get Spark session, initializing if necessary."""
+        """Get Spark session, initializing if necessary and checking if it's still active."""
         if self._spark is None:
             self._create_session()
+        else:
+            # Check if the session is stopped and restart if needed
+            try:
+                # Try to access the SparkContext to verify it's active
+                _ = self._spark.sparkContext.appName
+            except Exception:
+                # Session is stopped or invalid, recreate it
+                logger.warning("Spark session was stopped or invalid, recreating...")
+                self._spark = None
+                self._create_session()
         return self._spark
     
     def _create_session(self):

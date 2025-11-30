@@ -46,6 +46,10 @@ def _render_degree_distribution(mongo):
             
             if degree_data:
                 df = pd.DataFrame(degree_data)
+                # Add URLs for quick links
+                if 'video_id' in df.columns:
+                    from utils.youtube_helpers import youtube_url
+                    df['url'] = df['video_id'].map(youtube_url)
                 
                 fig = px.scatter(
                     df,
@@ -58,6 +62,7 @@ def _render_degree_distribution(mongo):
                 )
                 fig.update_layout(height=300)
                 st.plotly_chart(fig, width='stretch')
+                # No quick links UI — video IDs should be clickable within tables where applicable
             else:
                 st.info("No degree data available")
         except Exception as e:
