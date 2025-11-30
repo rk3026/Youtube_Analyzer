@@ -4,4 +4,4 @@
 Write-Host "YouTube Analyzer - Starting..." -ForegroundColor Cyan
 Write-Host ""
 
-poetry run streamlit run app/main.py
+poetry run streamlit run app/Home.py

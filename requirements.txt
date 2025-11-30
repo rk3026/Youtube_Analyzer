@@ -4,7 +4,7 @@
 streamlit>=1.28.0
 
 # Big Data Processing
-pyspark>=3.5.0
+pyspark==3.5.3
 
 # Database
 pymongo>=4.6.0

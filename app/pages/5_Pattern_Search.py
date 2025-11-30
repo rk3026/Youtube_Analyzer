@@ -16,6 +16,8 @@ app_dir = Path(__file__).parent.parent
 if str(app_dir) not in sys.path:
     sys.path.insert(0, str(app_dir))
 
+from utils.youtube_helpers import youtube_url
+
 logger = logging.getLogger(__name__)
 
 st.set_page_config(
@@ -154,6 +156,19 @@ if 'pattern_results' in st.session_state:
         df = pd.DataFrame(data)
         df.index = range(1, len(df) + 1)
         
+        # Convert video IDs to YouTube URLs for clickable links
+        if result_type == "pairs":
+            df['source_video'] = df['source_video'].apply(youtube_url)
+            df['related_video'] = df['related_video'].apply(youtube_url)
+        elif result_type == "chains":
+            df['video_a'] = df['video_a'].apply(youtube_url)
+            df['video_b'] = df['video_b'].apply(youtube_url)
+            df['video_c'] = df['video_c'].apply(youtube_url)
+        else:  # common
+            df['video_a'] = df['video_a'].apply(youtube_url)
+            df['video_b'] = df['video_b'].apply(youtube_url)
+            df['common_target'] = df['common_target'].apply(youtube_url)
+        
         category_text = results['category'] if results['category'] != 'All Categories' else 'all categories'
         st.markdown(f"#### {results['pattern_type']} ({category_text})")
         
@@ -163,34 +178,22 @@ if 'pattern_results' in st.session_state:
             st.markdown("##### Results Table")
             
             if result_type == "pairs":
-                st.dataframe(
-                    df,
-                    column_config={
-                        "source_video": "Source Video (a)",
-                        "related_video": "Related Video (b)"
-                    },
-                    use_container_width=True
-                )
+                display_df = df.copy()
+                display_df['Source Video (a)'] = display_df['source_video'].map(lambda v: f'<a href="{v}" target="_blank">{v.split("=")[1] if "=" in v else v}</a>')
+                display_df['Related Video (b)'] = display_df['related_video'].map(lambda v: f'<a href="{v}" target="_blank">{v.split("=")[1] if "=" in v else v}</a>')
+                st.write(display_df[['Source Video (a)', 'Related Video (b)']].to_html(escape=False, index=True), unsafe_allow_html=True)
             elif result_type == "chains":
-                st.dataframe(
-                    df,
-                    column_config={
-                        "video_a": "Video A",
-                        "video_b": "Video B",
-                        "video_c": "Video C"
-                    },
-                    use_container_width=True
-                )
+                display_df = df.copy()
+                display_df['Video A'] = display_df['video_a'].map(lambda v: f'<a href="{v}" target="_blank">{v.split("=")[1] if "=" in v else v}</a>')
+                display_df['Video B'] = display_df['video_b'].map(lambda v: f'<a href="{v}" target="_blank">{v.split("=")[1] if "=" in v else v}</a>')
+                display_df['Video C'] = display_df['video_c'].map(lambda v: f'<a href="{v}" target="_blank">{v.split("=")[1] if "=" in v else v}</a>')
+                st.write(display_df[['Video A', 'Video B', 'Video C']].to_html(escape=False, index=True), unsafe_allow_html=True)
             else:  # common
-                st.dataframe(
-                    df,
-                    column_config={
-                        "video_a": "Video A",
-                        "video_b": "Video B",
-                        "common_target": "Common Target (c)"
-                    },
-                    use_container_width=True
-                )
+                display_df = df.copy()
+                display_df['Video A'] = display_df['video_a'].map(lambda v: f'<a href="{v}" target="_blank">{v.split("=")[1] if "=" in v else v}</a>')
+                display_df['Video B'] = display_df['video_b'].map(lambda v: f'<a href="{v}" target="_blank">{v.split("=")[1] if "=" in v else v}</a>')
+                display_df['Common Target (c)'] = display_df['common_target'].map(lambda v: f'<a href="{v}" target="_blank">{v.split("=")[1] if "=" in v else v}</a>')
+                st.write(display_df[['Video A', 'Video B', 'Common Target (c)']].to_html(escape=False, index=True), unsafe_allow_html=True)
         
         with col2:
             st.markdown("##### Pattern Visualization")
