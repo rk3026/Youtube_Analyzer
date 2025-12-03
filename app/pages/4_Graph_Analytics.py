@@ -191,12 +191,13 @@ with tab1:
                     }
                 }
                 
-                # Display results
+                # Store results in session state
+                st.session_state['pagerank_results'] = {
+                    'top_videos': top_videos_pd,
+                    'performance': pagerank_performance,
+                    'sample_size': pagerank_limit
+                }
                 st.success(f"PageRank completed successfully!")
-                
-                # Display performance metrics
-                render_algorithm_performance(pagerank_performance)
-                st.divider()
                 
                 # Visualization: Top videos by PageRank
                 col1, col2 = st.columns(2)
@@ -258,6 +259,71 @@ with tab1:
             except Exception as e:
                 st.error(f"Error running PageRank: {e}")
                 logger.error(f"PageRank error: {e}", exc_info=True)
+    
+    # Display results if available in session state
+    if 'pagerank_results' in st.session_state:
+        results = st.session_state['pagerank_results']
+        top_videos_pd = results['top_videos']
+        pagerank_performance = results['performance']
+        
+        # Display performance metrics
+        render_algorithm_performance(pagerank_performance)
+        st.divider()
+        
+        # Visualization: Top videos by PageRank
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### 🏆 Top 20 Most Influential Videos")
+            fig_top = px.bar(
+                top_videos_pd.head(20),
+                x='pagerank',
+                y='id',
+                orientation='h',
+                color='category',
+                hover_data=['uploader'],
+                labels={'pagerank': 'PageRank Score', 'id': 'Video ID'},
+                title="Videos with Highest PageRank Scores"
+            )
+            fig_top.update_layout(height=600, yaxis={'categoryorder': 'total ascending'})
+            st.plotly_chart(fig_top, use_container_width=True)
+        
+        with col2:
+            st.markdown("#### 📊 PageRank Distribution")
+            fig_dist = px.histogram(
+                top_videos_pd,
+                x='pagerank',
+                nbins=30,
+                labels={'pagerank': 'PageRank Score', 'count': 'Number of Videos'},
+                title="PageRank Score Distribution (Top 50)"
+            )
+            st.plotly_chart(fig_dist, use_container_width=True)
+            
+            st.markdown("#### 📂 PageRank by Category")
+            category_scores = top_videos_pd.groupby('category')['pagerank'].agg(['mean', 'count']).reset_index()
+            category_scores = category_scores.sort_values('mean', ascending=False)
+            
+            fig_cat = px.bar(
+                category_scores,
+                x='mean',
+                y='category',
+                orientation='h',
+                text='count',
+                labels={'mean': 'Average PageRank', 'category': 'Category', 'count': 'Videos'},
+                title="Average PageRank by Category"
+            )
+            fig_cat.update_traces(texttemplate='%{text} videos', textposition='outside')
+            st.plotly_chart(fig_cat, use_container_width=True)
+        
+        # Data table
+        st.markdown("#### 📋 Top 50 Videos by PageRank")
+        display_df = top_videos_pd[['id', 'pagerank', 'category', 'uploader']].copy()
+        display_df.columns = ['Video ID', 'PageRank Score', 'Category', 'Uploader']
+        display_df['Video'] = display_df['Video ID'].map(lambda v: f'<a href="{youtube_url(v)}" target="_blank">{v}</a>')
+        display_df['Uploader'] = display_df['Uploader'].str[:30]
+        display_df['PageRank Score'] = display_df['PageRank Score'].round(6)
+        display_df = display_df[['Video', 'PageRank Score', 'Category', 'Uploader']]
+        st.write(display_df.to_html(escape=False, index=False), unsafe_allow_html=True)
 
 # ===================== TAB 2: Community Detection =====================
 with tab2:
@@ -448,9 +514,96 @@ with tab2:
                     display_df.columns = ['Video', 'Community ID', 'Category']
                     st.write(display_df.to_html(escape=False, index=False), unsafe_allow_html=True)
                 
+                # Store results in session state
+                st.session_state['community_results'] = {
+                    'communities': communities_pd,
+                    'top_communities': top_communities,
+                    'community_cats': community_cats,
+                    'performance': community_performance,
+                    'video_info': video_info
+                }
+                
             except Exception as e:
                 st.error(f"Error detecting communities: {e}")
                 logger.error(f"Community detection error: {e}", exc_info=True)
+    
+    # Display results if available in session state
+    if 'community_results' in st.session_state:
+        results = st.session_state['community_results']
+        communities_pd = results['communities']
+        community_performance = results['performance']
+        
+        # Display performance metrics
+        render_algorithm_performance(community_performance)
+        st.divider()
+        
+        # Visualizations
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### 📊 Community Size Distribution")
+            fig_sizes = px.bar(
+                communities_pd.head(20),
+                x='label',
+                y='count',
+                labels={'label': 'Community ID', 'count': 'Number of Videos'},
+                title="Top 20 Largest Communities"
+            )
+            st.plotly_chart(fig_sizes, use_container_width=True)
+        
+        with col2:
+            st.markdown("#### 🥧 Community Size Categories")
+            size_bins = pd.cut(
+                communities_pd['count'],
+                bins=[0, 10, 50, 100, 500, float('inf')],
+                labels=['Tiny (1-10)', 'Small (11-50)', 'Medium (51-100)', 'Large (101-500)', 'Huge (500+)']
+            )
+            size_dist = size_bins.value_counts().reset_index(name='count')
+            size_dist.columns = ['Size Category', 'Number of Communities']
+            
+            fig_pie = px.pie(
+                size_dist,
+                values='Number of Communities',
+                names='Size Category',
+                title="Distribution of Community Sizes"
+            )
+            st.plotly_chart(fig_pie, use_container_width=True)
+        
+        # Statistics
+        st.markdown("#### 📈 Community Statistics")
+        stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+        
+        with stat_col1:
+            st.metric("Total Communities", len(communities_pd))
+        with stat_col2:
+            st.metric("Largest Community", f"{communities_pd['count'].max():,} videos")
+        with stat_col3:
+            st.metric("Average Size", f"{communities_pd['count'].mean():.1f} videos")
+        with stat_col4:
+            st.metric("Median Size", f"{communities_pd['count'].median():.0f} videos")
+        
+        # Show sample videos from top communities
+        st.markdown("#### 🔍 Sample Videos from Top Communities")
+        top_communities = results['top_communities']
+        community_cats = results['community_cats']
+        
+        # Category distribution per community
+        fig_community_cats = px.bar(
+            community_cats,
+            x='label',
+            y='count',
+            color='category',
+            labels={'label': 'Community ID', 'count': 'Number of Videos'},
+            title="Category Distribution in Top 5 Communities",
+            barmode='stack'
+        )
+        st.plotly_chart(fig_community_cats, use_container_width=True)
+
+        # Show clickable list of sample videos
+        if 'id' in top_communities.columns:
+            display_df = top_communities[['Video', 'label', 'category']].copy()
+            display_df.columns = ['Video', 'Community ID', 'Category']
+            st.write(display_df.to_html(escape=False, index=False), unsafe_allow_html=True)
 
 # ===================== TAB 3: Centrality Metrics =====================
 with tab3:
@@ -631,9 +784,93 @@ with tab3:
                 )
                 st.plotly_chart(fig_scatter, use_container_width=True)
                 
+                # Store results in session state
+                st.session_state['centrality_results'] = {
+                    'centrality_df': centrality_df,
+                    'video_info': video_info,
+                    'performance': centrality_performance
+                }
+                
             except Exception as e:
                 st.error(f"Error calculating centrality: {e}")
                 logger.error(f"Centrality error: {e}", exc_info=True)
+    
+    # Display results if available in session state
+    if 'centrality_results' in st.session_state:
+        results = st.session_state['centrality_results']
+        centrality_df = results['centrality_df']
+        video_info = results['video_info']
+        centrality_performance = results['performance']
+        
+        # Display performance metrics
+        render_algorithm_performance(centrality_performance)
+        st.divider()
+        
+        # Visualizations
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### 🏆 Top Videos by Degree Centrality")
+            top_degree = centrality_df.nlargest(20, 'total_degree').copy()
+            top_degree['category'] = top_degree['video_id'].map(
+                lambda x: video_info.get(x, {}).get('category', 'Unknown')
+            )
+            
+            fig_degree = px.bar(
+                top_degree,
+                x='total_degree',
+                y='video_id',
+                orientation='h',
+                color='category',
+                labels={'total_degree': 'Total Degree', 'video_id': 'Video ID'},
+                title="Highest Degree Centrality"
+            )
+            fig_degree.update_layout(height=600, yaxis={'categoryorder': 'total ascending'})
+            st.plotly_chart(fig_degree, use_container_width=True)
+            # Show clickable links in a simple table (no extra UI widgets)
+            if 'video_id' in top_degree.columns:
+                top_degree['Video'] = top_degree['video_id'].map(lambda v: f'<a href="{youtube_url(v)}" target="_blank">{v}</a>')
+                display_top = top_degree[['Video', 'total_degree', 'category']].copy()
+                display_top.columns = ['Video', 'Total Degree', 'Category']
+                st.write(display_top.to_html(escape=False, index=False), unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown("#### 🌉 Top Videos by Betweenness Centrality")
+            top_between = centrality_df.nlargest(20, 'betweenness').copy()
+            top_between['category'] = top_between['video_id'].map(
+                lambda x: video_info.get(x, {}).get('category', 'Unknown')
+            )
+            
+            fig_between = px.bar(
+                top_between,
+                x='betweenness',
+                y='video_id',
+                orientation='h',
+                color='category',
+                labels={'betweenness': 'Betweenness Centrality', 'video_id': 'Video ID'},
+                title="Highest Betweenness (Bridge Videos)"
+            )
+            fig_between.update_layout(height=600, yaxis={'categoryorder': 'total ascending'})
+            st.plotly_chart(fig_between, use_container_width=True)
+        
+        # Scatter plot: Degree vs Betweenness
+        st.markdown("#### 🎯 Centrality Comparison")
+        top_100 = centrality_df.nlargest(100, 'total_degree').copy()
+        top_100['category'] = top_100['video_id'].map(
+            lambda x: video_info.get(x, {}).get('category', 'Unknown')
+        )
+        
+        fig_scatter = px.scatter(
+            top_100,
+            x='total_degree',
+            y='betweenness',
+            color='category',
+            size='total_degree',
+            hover_data=['video_id'],
+            labels={'total_degree': 'Degree Centrality', 'betweenness': 'Betweenness Centrality'},
+            title="Degree vs Betweenness Centrality (Top 100 videos)"
+        )
+        st.plotly_chart(fig_scatter, use_container_width=True)
 
 # ===================== TAB 4: Network Visualization =====================
 with tab4:
@@ -864,11 +1101,47 @@ with tab4:
                 with col4:
                     avg_degree = sum(degrees.values()) / len(degrees) if degrees else 0
                     st.metric("Avg Degree", f"{avg_degree:.2f}")
-                # Node selection UI removed; video IDs are now clickable where they are shown as links
+                
+                # Store results in session state
+                st.session_state['visualization_results'] = {
+                    'fig': fig,
+                    'graph_stats': {
+                        'nodes': len(G.nodes()),
+                        'edges': len(G.edges()),
+                        'density': density,
+                        'avg_degree': avg_degree
+                    },
+                    'performance': viz_performance
+                }
                 
             except Exception as e:
                 st.error(f"Error generating visualization: {e}")
                 logger.error(f"Visualization error: {e}", exc_info=True)
+    
+    # Display results if available in session state
+    if 'visualization_results' in st.session_state:
+        results = st.session_state['visualization_results']
+        fig = results['fig']
+        graph_stats = results['graph_stats']
+        viz_performance = results['performance']
+        
+        # Display performance metrics
+        render_algorithm_performance(viz_performance)
+        st.divider()
+        
+        # Display the graph
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Graph statistics
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Nodes", graph_stats['nodes'])
+        with col2:
+            st.metric("Edges", graph_stats['edges'])
+        with col3:
+            st.metric("Density", f"{graph_stats['density']:.4f}")
+        with col4:
+            st.metric("Avg Degree", f"{graph_stats['avg_degree']:.2f}")
 
 # Footer
 st.markdown("---")
