@@ -116,7 +116,7 @@ class SparkConnector:
             if self.connection_type == 'standalone':
                 # In standalone mode: match executor memory to worker memory
                 # Read from environment variable set by start script
-                worker_memory = os.environ.get('SPARK_WORKER_MEMORY', '4g')
+                worker_memory = os.environ.get('SPARK_WORKER_MEMORY', '4g') #Fallback to 4 GB
                 executor_memory = worker_memory
                 driver_memory = "4g"  # Driver always gets 4GB (runs on master)
                 logger.info(f"Standalone mode: executor memory = {executor_memory} (matches worker capacity)")
