@@ -15,46 +15,66 @@ logger = logging.getLogger(__name__)
 
 class SparkConnector:
     """Simple Spark connector for the application."""
-    
-    def __init__(self, mongo_uri: Optional[str] = None):
+
+    def __init__(self, mongo_uri: Optional[str] = None, mode: str = 'standalone'):
         """
         Initialize Spark connector.
-        
+
         Args:
             mongo_uri: MongoDB URI for Spark-MongoDB integration
+            mode: Connection mode - 'local' or 'standalone' (default: 'standalone')
         """
         self.app_name = 'YouTube Analytics'
-        self.connection_type = 'local'
-        
+
+        # Determine connection mode from parameter or environment variable
+        self.connection_type = os.environ.get('SPARK_MODE', mode).lower()
+        if self.connection_type not in ['local', 'standalone']:
+            logger.warning(f"Invalid mode '{self.connection_type}', defaulting to 'standalone'")
+            self.connection_type = 'standalone'
+
+        # Get Spark master URL for standalone mode
+        self.spark_master_url = os.environ.get('SPARK_MASTER_URL', 'spark://localhost:7077')
+
         # Get MongoDB URI
         if mongo_uri is None:
             mongo_uri = os.environ.get('MONGODB_URI', 'mongodb://localhost:27017/')
         self.mongo_uri = mongo_uri
-        
+
         # Spark session will be initialized on first use (lazy loading)
         self._spark: Optional[SparkSession] = None
-        
+
         # Set up environment variables
         self._setup_environment()
-        
-        logger.info(f"Spark connector initialized")
+
+        logger.info(f"Spark connector initialized in {self.connection_type} mode")
     
     def _setup_environment(self):
         """Set up environment variables for Spark."""
         # Set Python executables for PySpark
         os.environ['PYSPARK_PYTHON'] = sys.executable
         os.environ['PYSPARK_DRIVER_PYTHON'] = sys.executable
-        
+
         # Set Java/Hadoop homes if not already set (use env vars or defaults)
         if 'JAVA_HOME' not in os.environ:
             default_java = r'C:\Program Files\Java\jdk-17'
             if os.path.exists(default_java):
                 os.environ['JAVA_HOME'] = default_java
-        
+
         if 'HADOOP_HOME' not in os.environ:
             default_hadoop = r'C:\hadoop'
             if os.path.exists(default_hadoop):
                 os.environ['HADOOP_HOME'] = default_hadoop
+
+        # Initialize findspark for standalone mode if available
+        if self.connection_type == 'standalone':
+            try:
+                import findspark
+                spark_home = os.environ.get('SPARK_HOME', r'C:\spark\spark-3.5.7-bin-hadoop3')
+                if os.path.exists(spark_home):
+                    findspark.init(spark_home)
+                    logger.info(f"Initialized findspark with SPARK_HOME: {spark_home}")
+            except ImportError:
+                logger.warning("findspark not available, ensure SPARK_HOME is in PATH")
     
     @property
     def spark(self) -> SparkSession:
@@ -74,23 +94,29 @@ class SparkConnector:
         return self._spark
     
     def _create_session(self):
-        """Create Spark session with local clustering for scalability."""
+        """Create Spark session in local or standalone mode."""
         try:
-            logger.info("Creating Spark session with local clustering...")
-            
             # Detect available CPU cores for optimal parallelism
             import multiprocessing
             num_cores = multiprocessing.cpu_count()
             # Use all cores minus 1 to keep system responsive
             worker_cores = max(1, num_cores - 1)
-            
-            logger.info(f"Detected {num_cores} CPU cores, using {worker_cores} for Spark")
-            
+
+            # Determine master URL based on connection type
+            if self.connection_type == 'standalone':
+                master_url = self.spark_master_url
+                logger.info(f"Creating Spark session in standalone mode, connecting to {master_url}...")
+            else:
+                master_url = f'local[{worker_cores}]'
+                logger.info(f"Creating Spark session with local clustering ({worker_cores} cores)...")
+
+            logger.info(f"Detected {num_cores} CPU cores")
+
             # Build Spark session with clustering optimizations
             builder = (SparkSession.builder
                 .appName(self.app_name)
-                # Use all available cores for parallel processing
-                .master(f'local[{worker_cores}]')
+                # Set master URL based on mode (standalone or local)
+                .master(master_url)
                 
                 # Memory configuration for clustering
                 .config("spark.driver.memory", "4g")
@@ -146,12 +172,17 @@ class SparkConnector:
             # Create the session
             self._spark = builder.getOrCreate()
             self._spark.sparkContext.setLogLevel("WARN")
-            
+
             sc = self._spark.sparkContext
             logger.info(f"Spark session created (version {self._spark.version})")
             logger.info(f"Master: {sc.master}")
             logger.info(f"Default parallelism: {sc.defaultParallelism}")
-            logger.info(f"Configured for scalable local clustering with {worker_cores} cores")
+
+            if self.connection_type == 'standalone':
+                logger.info(f"Connected to Spark standalone cluster at {master_url}")
+                logger.info(f"Master UI available at: http://localhost:8080")
+            else:
+                logger.info(f"Configured for scalable local clustering with {worker_cores} cores")
             
         except Exception as e:
             logger.error(f"Failed to create Spark session: {e}")
@@ -285,18 +316,22 @@ def get_spark_session(_reload: bool = False) -> SparkSession:
 
 
 @st.cache_resource
-def get_spark_connector(_reload: bool = False) -> SparkConnector:
+def get_spark_connector(_reload: bool = False, mode: str = 'standalone') -> SparkConnector:
     """
     Get the global Spark connector instance (cached in Streamlit).
-    
+
     Uses Streamlit's cache_resource to ensure single instance across reruns.
     The _reload parameter is prefixed with underscore to prevent it from
     affecting the cache key.
-    
+
+    Args:
+        _reload: Force reload of the connector (prefix with _ to exclude from cache key)
+        mode: Connection mode - 'local' or 'standalone' (default: 'standalone')
+
     Returns:
         SparkConnector instance
     """
     # Create a new connector - Streamlit's cache_resource ensures this
     # only runs once and reuses the same instance across reruns
-    connector = SparkConnector()
+    connector = SparkConnector(mode=mode)
     return connector
