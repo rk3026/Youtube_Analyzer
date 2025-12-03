@@ -11,6 +11,8 @@ import networkx as nx
 from typing import Optional
 import logging
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 from graphframes import GraphFrame
 
@@ -21,12 +23,13 @@ if str(app_dir) not in sys.path:
 
 from utils import get_mongo_connector, get_spark_connector
 from utils.youtube_helpers import youtube_url, short_youtube_url
+from components import render_video_link, render_algorithm_performance
 
 logger = logging.getLogger(__name__)
 
 st.set_page_config(
     page_title="Graph Analytics - YouTube Analyzer",
-    page_icon="🔗",
+    page_icon="link",
     layout="wide"
 )
 
@@ -38,20 +41,20 @@ spark_conn = get_spark_connector()
 # use youtube helpers from utils for links
 
 # Header
-st.title("🔗 Graph Analytics")
+st.title("Graph Analytics")
 st.markdown("Advanced network analysis using Spark GraphFrames for large-scale graph mining")
 
 # Tabs for different analyses
 tab1, tab2, tab3, tab4 = st.tabs([
-    "📊 PageRank Analysis",
-    "🏘️ Community Detection", 
-    "🎯 Centrality Metrics",
-    "🕸️ Network Visualization"
+    "PageRank Analysis",
+    "Community Detection", 
+    "Centrality Metrics",
+    "Network Visualization"
 ])
 
 # ===================== TAB 1: PageRank Analysis =====================
 with tab1:
-    st.markdown("### 📊 PageRank Analysis")
+    st.markdown("### PageRank Analysis")
     st.markdown("Identify the most influential videos in the network based on link structure.")
     
     col1, col2, col3 = st.columns(3)
@@ -86,9 +89,11 @@ with tab1:
             help="Maximum PageRank iterations"
         )
     
-    if st.button("🚀 Run PageRank Analysis", type="primary", key="pagerank_btn"):
+    if st.button("Run PageRank Analysis", type="primary", key="pagerank_btn"):
         with st.spinner("Running PageRank algorithm on video network..."):
             try:
+                start_time = time.time()
+                
                 # Load graph data from MongoDB using Spark
                 spark = spark_conn.spark
                 
@@ -139,7 +144,9 @@ with tab1:
                 
                 # Run PageRank
                 with st.spinner(f"Computing PageRank (max {pagerank_iter} iterations)..."):
+                    pagerank_start = time.time()
                     results = g.pageRank(resetProbability=pagerank_reset, maxIter=pagerank_iter)
+                    pagerank_time = time.time() - pagerank_start
                     
                     # Get top videos by PageRank
                     top_videos = results.vertices.orderBy("pagerank", ascending=False).limit(50)
@@ -166,8 +173,30 @@ with tab1:
                     top_videos_pd['url'] = top_videos_pd['id'].map(youtube_url)
                     top_videos_pd['short_url'] = top_videos_pd['id'].map(short_youtube_url)
                 
+                total_time = time.time() - start_time
+                
+                # Create performance metrics
+                pagerank_performance = {
+                    'execution_time': total_time,
+                    'rows_processed': edge_count,
+                    'rows_returned': len(top_videos_pd),
+                    'query_type': 'PageRank Analysis',
+                    'timestamp': datetime.now(),
+                    'additional_metrics': {
+                        'algorithm': 'GraphFrames PageRank',
+                        'max_iterations': pagerank_iter,
+                        'reset_probability': pagerank_reset,
+                        'vertices_analyzed': vertex_count,
+                        'pagerank_computation_time': pagerank_time
+                    }
+                }
+                
                 # Display results
-                st.success(f"✅ PageRank completed successfully!")
+                st.success(f"PageRank completed successfully!")
+                
+                # Display performance metrics
+                render_algorithm_performance(pagerank_performance)
+                st.divider()
                 
                 # Visualization: Top videos by PageRank
                 col1, col2 = st.columns(2)
@@ -261,6 +290,8 @@ with tab2:
     if st.button("🔍 Detect Communities", type="primary", key="community_btn"):
         with st.spinner("Running community detection algorithm..."):
             try:
+                start_time = time.time()
+                
                 spark = spark_conn.spark
                 
                 # Load graph data
@@ -298,11 +329,35 @@ with tab2:
                 g = GraphFrame(vertices_df, edges_df)
                 
                 # Run Label Propagation Algorithm
+                community_start = time.time()
                 result = g.labelPropagation(maxIter=max_iterations)
                 communities = result.groupBy("label").count().orderBy("count", ascending=False)
                 communities_pd = communities.toPandas()
+                community_time = time.time() - community_start
                 
-                st.success(f"✅ Found {len(communities_pd)} communities!")
+                total_time = time.time() - start_time
+                
+                # Create performance metrics
+                community_performance = {
+                    'execution_time': total_time,
+                    'rows_processed': community_limit,
+                    'rows_returned': len(communities_pd),
+                    'query_type': 'Community Detection',
+                    'timestamp': datetime.now(),
+                    'additional_metrics': {
+                        'algorithm': 'Label Propagation',
+                        'max_iterations': max_iterations,
+                        'communities_found': len(communities_pd),
+                        'computation_time': community_time,
+                        'largest_community': communities_pd['count'].max() if not communities_pd.empty else 0
+                    }
+                }
+                
+                st.success(f"Found {len(communities_pd)} communities!")
+                
+                # Display performance metrics
+                render_algorithm_performance(community_performance)
+                st.divider()
                 
                 # Visualizations
                 col1, col2 = st.columns(2)
@@ -415,6 +470,8 @@ with tab3:
     if st.button("📊 Calculate Centrality Metrics", type="primary", key="centrality_btn"):
         with st.spinner("Calculating centrality metrics..."):
             try:
+                start_time = time.time()
+                
                 spark = spark_conn.spark
                 
                 # Load graph data
@@ -434,18 +491,28 @@ with tab3:
                 st.info(f"Analyzing network: {len(G.nodes())} nodes, {len(G.edges())} edges")
                 
                 # Calculate various centrality metrics
+                centrality_start = time.time()
+                
                 with st.spinner("Computing degree centrality..."):
+                    degree_start = time.time()
                     in_degree = dict(G.in_degree())
                     out_degree = dict(G.out_degree())
+                    degree_time = time.time() - degree_start
                 
                 with st.spinner("Computing betweenness centrality (this may take a while)..."):
+                    betweenness_start = time.time()
                     betweenness = nx.betweenness_centrality(G, k=min(100, len(G.nodes())))
+                    betweenness_time = time.time() - betweenness_start
                 
                 with st.spinner("Computing closeness centrality..."):
+                    closeness_start = time.time()
                     try:
                         closeness = nx.closeness_centrality(G)
                     except:
                         closeness = {}
+                    closeness_time = time.time() - closeness_start
+                
+                centrality_computation_time = time.time() - centrality_start
                 
                 # Compile results
                 centrality_data = []
@@ -471,8 +538,32 @@ with tab3:
                     )
                 }
                 
+                total_time = time.time() - start_time
+                
+                # Create performance metrics
+                centrality_performance = {
+                    'execution_time': total_time,
+                    'rows_processed': centrality_limit,
+                    'rows_returned': len(centrality_df),
+                    'query_type': 'Centrality Analysis',
+                    'timestamp': datetime.now(),
+                    'additional_metrics': {
+                        'library': 'NetworkX',
+                        'nodes_analyzed': len(G.nodes()),
+                        'edges_analyzed': len(G.edges()),
+                        'degree_time': degree_time,
+                        'betweenness_time': betweenness_time,
+                        'closeness_time': closeness_time,
+                        'total_computation_time': centrality_computation_time
+                    }
+                }
+                
                 # Display results
-                st.success("✅ Centrality metrics calculated!")
+                st.success("Centrality metrics calculated!")
+                
+                # Display performance metrics
+                render_algorithm_performance(centrality_performance)
+                st.divider()
                 
                 # Visualizations
                 col1, col2 = st.columns(2)
@@ -586,6 +677,8 @@ with tab4:
     if st.button("🎨 Generate Visualization", type="primary", key="vis_btn"):
         with st.spinner(f"Building network graph with {vis_sample_size} edges..."):
             try:
+                start_time = time.time()
+                
                 # Sample edges from MongoDB
                 edges_collection = mongo.get_collection('edges')
                 edge_sample = list(edges_collection.aggregate([
@@ -594,6 +687,7 @@ with tab4:
                 ]))
                 
                 # Build NetworkX graph
+                graph_start = time.time()
                 G = nx.DiGraph()
                 for edge in edge_sample:
                     if edge.get('src') and edge.get('dst'):
@@ -604,6 +698,7 @@ with tab4:
                 top_nodes = sorted(degrees.items(), key=lambda x: x[1], reverse=True)[:vis_sample_size]
                 top_node_ids = [n[0] for n in top_nodes]
                 G = G.subgraph(top_node_ids).copy()
+                graph_build_time = time.time() - graph_start
                 
                 st.info(f"Visualizing {len(G.nodes())} nodes and {len(G.edges())} edges")
                 
@@ -618,9 +713,12 @@ with tab4:
                 
                 # Calculate PageRank if needed
                 if vis_color == "PageRank":
+                    pagerank_start = time.time()
                     pagerank_scores = nx.pagerank(G, max_iter=20)
+                    pagerank_time = time.time() - pagerank_start
                 else:
                     pagerank_scores = {}
+                    pagerank_time = 0
                 
                 # Set node attributes
                 for node in G.nodes():
@@ -630,6 +728,7 @@ with tab4:
                     G.nodes[node]['pagerank'] = pagerank_scores.get(node, 0)
                 
                 # Calculate layout
+                layout_start = time.time()
                 if vis_layout == "Spring":
                     pos = nx.spring_layout(G, k=0.5, iterations=50)
                 elif vis_layout == "Circular":
@@ -638,6 +737,7 @@ with tab4:
                     pos = nx.kamada_kawai_layout(G)
                 else:
                     pos = nx.shell_layout(G)
+                layout_time = time.time() - layout_start
                 
                 # Create Plotly visualization
                 edge_x, edge_y = [], []
@@ -725,6 +825,30 @@ with tab4:
                     yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
                     height=700
                 )
+                
+                total_time = time.time() - start_time
+                
+                # Create performance metrics
+                viz_performance = {
+                    'execution_time': total_time,
+                    'rows_processed': vis_sample_size * 3,  # Sampled edges
+                    'rows_returned': len(G.nodes()),
+                    'query_type': 'Network Visualization',
+                    'timestamp': datetime.now(),
+                    'additional_metrics': {
+                        'layout_algorithm': vis_layout,
+                        'color_attribute': vis_color,
+                        'graph_build_time': graph_build_time,
+                        'layout_time': layout_time,
+                        'pagerank_time': pagerank_time,
+                        'nodes_visualized': len(G.nodes()),
+                        'edges_visualized': len(G.edges())
+                    }
+                }
+                
+                # Display performance metrics before the visualization
+                render_algorithm_performance(viz_performance)
+                st.divider()
                 
                 st.plotly_chart(fig, use_container_width=True)
                 
