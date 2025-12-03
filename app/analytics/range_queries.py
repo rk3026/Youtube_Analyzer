@@ -4,7 +4,9 @@ Provides queries for filtering videos by duration, views, and custom criteria.
 """
 
 import logging
-from typing import Dict, Any, List, Optional
+import time
+from datetime import datetime
+from typing import Dict, Any, List, Optional, Tuple
 from pyspark.sql import DataFrame
 from pyspark.sql.functions import col, desc
 
@@ -30,7 +32,7 @@ class RangeQueryAnalytics:
         min_duration: int,
         max_duration: int,
         max_results: int = 100
-    ) -> List[Dict[str, Any]]:
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
         Find all videos in a category with duration within a specified range.
         
@@ -41,11 +43,14 @@ class RangeQueryAnalytics:
             max_results: Maximum number of results to return
             
         Returns:
-            List of dictionaries with video details
+            Tuple of (results list, performance metrics dict)
         """
         logger.info(f"Finding {category} videos with duration {min_duration}-{max_duration} sec...")
         
+        start_time = time.time()
+        
         snapshots_df = self.spark_connector.load_collection_from_mongo('video_snapshots')
+        total_rows = snapshots_df.count()
         
         filtered = (
             snapshots_df
@@ -57,6 +62,8 @@ class RangeQueryAnalytics:
             .limit(max_results)
             .collect()
         )
+        
+        execution_time = time.time() - start_time
         
         results = []
         for row in filtered:
@@ -70,8 +77,22 @@ class RangeQueryAnalytics:
                 'category': row['category']
             })
         
-        logger.info(f"Found {len(results)} videos")
-        return results
+        performance = {
+            'execution_time': execution_time,
+            'rows_processed': total_rows,
+            'rows_returned': len(results),
+            'query_type': 'Duration Range Query',
+            'timestamp': datetime.now(),
+            'additional_metrics': {
+                'category': category,
+                'min_duration': min_duration,
+                'max_duration': max_duration,
+                'max_results_limit': max_results
+            }
+        }
+        
+        logger.info(f"Found {len(results)} videos in {execution_time:.3f}s")
+        return results, performance
     
     def query_by_views(
         self,
@@ -79,7 +100,7 @@ class RangeQueryAnalytics:
         max_views: int,
         category: Optional[str] = None,
         max_results: int = 100
-    ) -> List[Dict[str, Any]]:
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
         Find all videos with view counts within a specified range.
         
@@ -90,11 +111,14 @@ class RangeQueryAnalytics:
             max_results: Maximum number of results to return
             
         Returns:
-            List of dictionaries with video details
+            Tuple of (results list, performance metrics dict)
         """
         logger.info(f"Finding videos with {min_views:,}-{max_views:,} views...")
         
+        start_time = time.time()
+        
         snapshots_df = self.spark_connector.load_collection_from_mongo('video_snapshots')
+        total_rows = snapshots_df.count()
         
         # Build filter
         base_filter = col('views').between(min_views, max_views)
@@ -110,6 +134,8 @@ class RangeQueryAnalytics:
             .collect()
         )
         
+        execution_time = time.time() - start_time
+        
         results = []
         for row in filtered:
             results.append({
@@ -121,5 +147,19 @@ class RangeQueryAnalytics:
                 'duration_sec': int(row['length_sec']) if row['length_sec'] else 0
             })
         
-        logger.info(f"Found {len(results)} videos")
-        return results
+        performance = {
+            'execution_time': execution_time,
+            'rows_processed': total_rows,
+            'rows_returned': len(results),
+            'query_type': 'Views Range Query',
+            'timestamp': datetime.now(),
+            'additional_metrics': {
+                'min_views': min_views,
+                'max_views': max_views,
+                'category_filter': category if category and category != 'All Categories' else 'None',
+                'max_results_limit': max_results
+            }
+        }
+        
+        logger.info(f"Found {len(results)} videos in {execution_time:.3f}s")
+        return results, performance

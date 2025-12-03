@@ -17,6 +17,7 @@ if str(app_dir) not in sys.path:
     sys.path.insert(0, str(app_dir))
 
 from utils.youtube_helpers import youtube_url
+from components import render_algorithm_performance
 
 logger = logging.getLogger(__name__)
 
@@ -114,21 +115,21 @@ if run_search:
             category = selected_category if selected_category != 'All Categories' else None
             
             if "Related Pairs" in pattern_type:
-                results = pattern_search.find_related_video_pairs(
+                results, performance = pattern_search.find_related_video_pairs(
                     category=category,
                     max_results=max_results,
                     sample_size=sample_size
                 )
                 result_type = "pairs"
             elif "Video Chains" in pattern_type:
-                results = pattern_search.find_video_chains(
+                results, performance = pattern_search.find_video_chains(
                     category=category,
                     chain_length=2,
                     max_results=max_results
                 )
                 result_type = "chains"
             else:  # Common Recommendations
-                results = pattern_search.find_common_recommendations(
+                results, performance = pattern_search.find_common_recommendations(
                     category=category,
                     max_results=max_results
                 )
@@ -138,7 +139,8 @@ if run_search:
                 'data': results,
                 'category': selected_category,
                 'pattern_type': pattern_type,
-                'result_type': result_type
+                'result_type': result_type,
+                'performance': performance
             }
             st.success(f"✅ Found {len(results)} results!")
             
@@ -151,6 +153,11 @@ if 'pattern_results' in st.session_state:
     results = st.session_state['pattern_results']
     data = results['data']
     result_type = results['result_type']
+    
+    # Display performance metrics
+    if 'performance' in results:
+        render_algorithm_performance(results['performance'])
+        st.divider()
     
     if data:
         df = pd.DataFrame(data)

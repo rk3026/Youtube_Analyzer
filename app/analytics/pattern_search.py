@@ -5,7 +5,9 @@ This avoids SparkSession issues that occur with GraphFrames.
 """
 
 import logging
-from typing import Dict, Any, List, Optional
+import time
+from datetime import datetime
+from typing import Dict, Any, List, Optional, Tuple
 from pyspark.sql.functions import col, desc
 
 logger = logging.getLogger(__name__)
@@ -39,7 +41,7 @@ class PatternSearch:
         category: Optional[str] = None,
         max_results: int = 50,
         sample_size: int = 50000
-    ) -> List[Dict[str, Any]]:
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
         Find pairs of related videos (a)->(b) using DataFrame joins.
         
@@ -52,14 +54,17 @@ class PatternSearch:
             sample_size: Number of edges to sample for efficiency
             
         Returns:
-            List of dictionaries with video pair details
+            Tuple of (results list, performance metrics dict)
         """
         logger.info(f"Finding related video pairs{f' in {category}' if category else ''}...")
+        
+        start_time = time.time()
         
         self._load_data()
         
         # Sample edges for memory efficiency
         edges_sample = self._edges_df.select('src', 'dst').limit(sample_size)
+        edges_processed = sample_size
         
         if category:
             # Filter source videos by category
@@ -83,6 +88,8 @@ class PatternSearch:
             col('dst').alias('related_video')
         ).limit(max_results).collect()
         
+        execution_time = time.time() - start_time
+        
         results = []
         for row in pairs:
             results.append({
@@ -90,15 +97,28 @@ class PatternSearch:
                 'related_video': row['related_video']
             })
         
-        logger.info(f"Found {len(results)} video pairs")
-        return results
+        performance = {
+            'execution_time': execution_time,
+            'rows_processed': edges_processed,
+            'rows_returned': len(results),
+            'query_type': 'Related Video Pairs Pattern',
+            'timestamp': datetime.now(),
+            'additional_metrics': {
+                'category_filter': category if category else 'None',
+                'sample_size': sample_size,
+                'pattern': '(a)→(b)'
+            }
+        }
+        
+        logger.info(f"Found {len(results)} video pairs in {execution_time:.3f}s")
+        return results, performance
     
     def find_video_chains(
         self,
         category: Optional[str] = None,
         chain_length: int = 2,
         max_results: int = 30
-    ) -> List[Dict[str, Any]]:
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
         Find chains of related videos: (a)->(b)->(c)
         
@@ -110,13 +130,16 @@ class PatternSearch:
             max_results: Maximum number of chains to return
             
         Returns:
-            List of dictionaries with video chain details
+            Tuple of (results list, performance metrics dict)
         """
         logger.info(f"Finding video chains of length {chain_length}...")
+        
+        start_time = time.time()
         
         self._load_data()
         
         edges = self._edges_df.select('src', 'dst').limit(50000)
+        edges_processed = 50000
         
         if chain_length == 1:
             # Simple pairs (a)->(b)
@@ -153,6 +176,8 @@ class PatternSearch:
         
         chain_results = chains.limit(max_results).collect()
         
+        execution_time = time.time() - start_time
+        
         results = []
         for row in chain_results:
             results.append({
@@ -161,15 +186,29 @@ class PatternSearch:
                 'video_c': row['c']
             })
         
-        logger.info(f"Found {len(results)} video chains")
-        return results
+        performance = {
+            'execution_time': execution_time,
+            'rows_processed': edges_processed,
+            'rows_returned': len(results),
+            'query_type': 'Video Chain Pattern',
+            'timestamp': datetime.now(),
+            'additional_metrics': {
+                'category_filter': category if category else 'None',
+                'chain_length': chain_length,
+                'pattern': '(a)→(b)→(c)',
+                'join_operations': 1
+            }
+        }
+        
+        logger.info(f"Found {len(results)} video chains in {execution_time:.3f}s")
+        return results, performance
     
     def find_common_recommendations(
         self,
         category: Optional[str] = None,
         min_common: int = 2,
         max_results: int = 30
-    ) -> List[Dict[str, Any]]:
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
         Find videos that share common recommendations.
         
@@ -181,13 +220,16 @@ class PatternSearch:
             max_results: Maximum results to return
             
         Returns:
-            List of dictionaries with common recommendation details
+            Tuple of (results list, performance metrics dict)
         """
         logger.info(f"Finding common recommendations...")
+        
+        start_time = time.time()
         
         self._load_data()
         
         edges = self._edges_df.select('src', 'dst').limit(50000)
+        edges_processed = 50000
         
         # Self-join on destination to find common targets
         edges_a = edges.select(
@@ -220,6 +262,8 @@ class PatternSearch:
         
         results_data = common.limit(max_results).collect()
         
+        execution_time = time.time() - start_time
+        
         results = []
         for row in results_data:
             results.append({
@@ -228,5 +272,19 @@ class PatternSearch:
                 'common_target': row['common_target']
             })
         
-        logger.info(f"Found {len(results)} common recommendation patterns")
-        return results
+        performance = {
+            'execution_time': execution_time,
+            'rows_processed': edges_processed,
+            'rows_returned': len(results),
+            'query_type': 'Common Recommendations Pattern',
+            'timestamp': datetime.now(),
+            'additional_metrics': {
+                'category_filter': category if category else 'None',
+                'min_common_threshold': min_common,
+                'pattern': '(a)→(c)←(b)',
+                'join_operations': 1
+            }
+        }
+        
+        logger.info(f"Found {len(results)} common recommendation patterns in {execution_time:.3f}s")
+        return results, performance

@@ -12,7 +12,7 @@ from typing import Dict, Any, List
 import logging
 import sys
 from pathlib import Path
-from components import render_video_link
+from components import render_video_link, render_algorithm_performance
 from utils.youtube_helpers import youtube_url, short_youtube_url, add_youtube_links_to_df
 
 # Add parent directory to path for imports
@@ -63,11 +63,12 @@ with tab1:
                 spark_conn = get_spark_connector()
                 topk = TopKAnalytics(spark_conn)
                 
-                results = topk.get_top_k_categories(k_categories)
+                results, performance = topk.get_top_k_categories(k_categories)
                 
                 st.session_state['top_categories_results'] = {
                     'data': results,
-                    'k': k_categories
+                    'k': k_categories,
+                    'performance': performance
                 }
                 st.success(f"✅ Found top {k_categories} categories!")
                 
@@ -79,6 +80,11 @@ with tab1:
     if 'top_categories_results' in st.session_state:
         results = st.session_state['top_categories_results']
         data = results['data']
+        
+        # Display performance metrics
+        if 'performance' in results:
+            render_algorithm_performance(results['performance'])
+            st.divider()
         
         if data:
             df = pd.DataFrame(data)
@@ -149,11 +155,12 @@ with tab2:
                 spark_conn = get_spark_connector()
                 topk = TopKAnalytics(spark_conn)
                 
-                results = topk.get_top_k_most_viewed(k_views)
+                results, performance = topk.get_top_k_most_viewed(k_views)
                 
                 st.session_state['top_viewed_results'] = {
                     'data': results,
-                    'k': k_views
+                    'k': k_views,
+                    'performance': performance
                 }
                 st.success(f"✅ Found top {k_views} most viewed videos!")
                 
@@ -165,6 +172,11 @@ with tab2:
     if 'top_viewed_results' in st.session_state:
         results = st.session_state['top_viewed_results']
         data = results['data']
+        
+        # Display performance metrics
+        if 'performance' in results:
+            render_algorithm_performance(results['performance'])
+            st.divider()
         
         if data:
             df = pd.DataFrame(data)
@@ -248,12 +260,13 @@ with tab3:
                 spark_conn = get_spark_connector()
                 topk = TopKAnalytics(spark_conn)
                 
-                results = topk.get_top_k_highest_rated(k_rated, min_ratings)
+                results, performance = topk.get_top_k_highest_rated(k_rated, min_ratings)
                 
                 st.session_state['top_rated_results'] = {
                     'data': results,
                     'k': k_rated,
-                    'min_ratings': min_ratings
+                    'min_ratings': min_ratings,
+                    'performance': performance
                 }
                 st.success(f"✅ Found top {k_rated} highest rated videos (min {min_ratings} ratings)!")
                 
@@ -265,6 +278,11 @@ with tab3:
     if 'top_rated_results' in st.session_state:
         results = st.session_state['top_rated_results']
         data = results['data']
+        
+        # Display performance metrics
+        if 'performance' in results:
+            render_algorithm_performance(results['performance'])
+            st.divider()
         
         if data:
             df = pd.DataFrame(data)

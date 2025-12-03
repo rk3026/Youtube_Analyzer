@@ -12,7 +12,7 @@ from typing import Dict, Any, List
 import logging
 import sys
 from pathlib import Path
-from components import render_video_link
+from components import render_video_link, render_algorithm_performance
 from utils.youtube_helpers import youtube_url, short_youtube_url, add_youtube_links_to_df
 
 # Add parent directory to path for imports
@@ -94,7 +94,7 @@ with tab1:
                 spark_conn = get_spark_connector()
                 range_analytics = RangeQueryAnalytics(spark_conn)
                 
-                results = range_analytics.query_by_duration(
+                results, performance = range_analytics.query_by_duration(
                     category=selected_category,
                     min_duration=duration_range[0],
                     max_duration=duration_range[1],
@@ -105,7 +105,8 @@ with tab1:
                     'data': results,
                     'category': selected_category,
                     'min_duration': duration_range[0],
-                    'max_duration': duration_range[1]
+                    'max_duration': duration_range[1],
+                    'performance': performance
                 }
                 st.success(f"✅ Found {len(results)} videos!")
                 
@@ -117,6 +118,11 @@ with tab1:
     if 'duration_range_results' in st.session_state:
         results = st.session_state['duration_range_results']
         data = results['data']
+        
+        # Display performance metrics
+        if 'performance' in results:
+            render_algorithm_performance(results['performance'])
+            st.divider()
         
         if data:
             df = pd.DataFrame(data)
@@ -227,7 +233,7 @@ with tab2:
                 spark_conn = get_spark_connector()
                 range_analytics = RangeQueryAnalytics(spark_conn)
                 
-                results = range_analytics.query_by_views(
+                results, performance = range_analytics.query_by_views(
                     min_views=views_range[0],
                     max_views=views_range[1],
                     category=views_category if views_category != 'All Categories' else None,
@@ -238,7 +244,8 @@ with tab2:
                     'data': results,
                     'category': views_category,
                     'min_views': views_range[0],
-                    'max_views': views_range[1]
+                    'max_views': views_range[1],
+                    'performance': performance
                 }
                 st.success(f"✅ Found {len(results)} videos!")
                 
@@ -250,6 +257,11 @@ with tab2:
     if 'views_range_results' in st.session_state:
         results = st.session_state['views_range_results']
         data = results['data']
+        
+        # Display performance metrics
+        if 'performance' in results:
+            render_algorithm_performance(results['performance'])
+            st.divider()
         
         if data:
             df = pd.DataFrame(data)

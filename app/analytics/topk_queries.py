@@ -4,7 +4,9 @@ Provides queries for finding top K categories, most viewed videos, and highest r
 """
 
 import logging
-from typing import Dict, Any, List
+import time
+from datetime import datetime
+from typing import Dict, Any, List, Tuple
 from pyspark.sql import DataFrame
 from pyspark.sql.functions import col, count, desc
 
@@ -24,7 +26,7 @@ class TopKAnalytics:
         self.spark_connector = spark_connector
         self.spark = spark_connector.spark
     
-    def get_top_k_categories(self, k: int = 10) -> List[Dict[str, Any]]:
+    def get_top_k_categories(self, k: int = 10) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
         Find top K categories by number of videos uploaded.
         
@@ -32,11 +34,14 @@ class TopKAnalytics:
             k: Number of top categories to retrieve
             
         Returns:
-            List of dictionaries with category and video_count
+            Tuple of (results list, performance metrics dict)
         """
         logger.info(f"Finding top {k} categories by video count...")
         
+        start_time = time.time()
+        
         videos_df = self.spark_connector.load_collection_from_mongo('videos')
+        rows_processed = videos_df.count()
         
         top_categories = (
             videos_df
@@ -47,6 +52,8 @@ class TopKAnalytics:
             .collect()
         )
         
+        execution_time = time.time() - start_time
+        
         results = []
         for row in top_categories:
             results.append({
@@ -54,10 +61,22 @@ class TopKAnalytics:
                 'video_count': int(row['video_count'])
             })
         
-        logger.info(f"Found {len(results)} categories")
-        return results
+        performance = {
+            'execution_time': execution_time,
+            'rows_processed': rows_processed,
+            'rows_returned': len(results),
+            'query_type': 'Top-K Categories',
+            'timestamp': datetime.now(),
+            'additional_metrics': {
+                'k_value': k,
+                'groupby_operations': 1
+            }
+        }
+        
+        logger.info(f"Found {len(results)} categories in {execution_time:.3f}s")
+        return results, performance
     
-    def get_top_k_most_viewed(self, k: int = 10) -> List[Dict[str, Any]]:
+    def get_top_k_most_viewed(self, k: int = 10) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
         Find top K videos by view count.
         Uses video_snapshots collection which contains view data.
@@ -66,11 +85,14 @@ class TopKAnalytics:
             k: Number of top videos to retrieve
             
         Returns:
-            List of dictionaries with video details
+            Tuple of (results list, performance metrics dict)
         """
         logger.info(f"Finding top {k} most viewed videos...")
         
+        start_time = time.time()
+        
         snapshots_df = self.spark_connector.load_collection_from_mongo('video_snapshots')
+        rows_processed = snapshots_df.count()
         
         top_viewed = (
             snapshots_df
@@ -79,6 +101,8 @@ class TopKAnalytics:
             .limit(k)
             .collect()
         )
+        
+        execution_time = time.time() - start_time
         
         results = []
         for row in top_viewed:
@@ -90,10 +114,22 @@ class TopKAnalytics:
                 'num_ratings': int(row['ratings']) if row['ratings'] else 0
             })
         
-        logger.info(f"Found {len(results)} most viewed videos")
-        return results
+        performance = {
+            'execution_time': execution_time,
+            'rows_processed': rows_processed,
+            'rows_returned': len(results),
+            'query_type': 'Top-K Most Viewed',
+            'timestamp': datetime.now(),
+            'additional_metrics': {
+                'k_value': k,
+                'sort_field': 'views'
+            }
+        }
+        
+        logger.info(f"Found {len(results)} most viewed videos in {execution_time:.3f}s")
+        return results, performance
     
-    def get_top_k_highest_rated(self, k: int = 10, min_ratings: int = 100) -> List[Dict[str, Any]]:
+    def get_top_k_highest_rated(self, k: int = 10, min_ratings: int = 100) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
         Find top K videos by rating.
         Uses video_snapshots collection which contains rating data.
@@ -103,11 +139,14 @@ class TopKAnalytics:
             min_ratings: Minimum number of ratings required (filters out low-sample videos)
             
         Returns:
-            List of dictionaries with video details
+            Tuple of (results list, performance metrics dict)
         """
         logger.info(f"Finding top {k} highest rated videos (min {min_ratings} ratings)...")
         
+        start_time = time.time()
+        
         snapshots_df = self.spark_connector.load_collection_from_mongo('video_snapshots')
+        total_rows = snapshots_df.count()
         
         top_rated = (
             snapshots_df
@@ -117,6 +156,8 @@ class TopKAnalytics:
             .limit(k)
             .collect()
         )
+        
+        execution_time = time.time() - start_time
         
         results = []
         for row in top_rated:
@@ -128,5 +169,18 @@ class TopKAnalytics:
                 'category': row['category']
             })
         
-        logger.info(f"Found {len(results)} highest rated videos")
-        return results
+        performance = {
+            'execution_time': execution_time,
+            'rows_processed': total_rows,
+            'rows_returned': len(results),
+            'query_type': 'Top-K Highest Rated',
+            'timestamp': datetime.now(),
+            'additional_metrics': {
+                'k_value': k,
+                'min_ratings_filter': min_ratings,
+                'sort_field': 'rating'
+            }
+        }
+        
+        logger.info(f"Found {len(results)} highest rated videos in {execution_time:.3f}s")
+        return results, performance
