@@ -112,15 +112,29 @@ class SparkConnector:
 
             logger.info(f"Detected {num_cores} CPU cores")
 
+            # Determine executor memory based on mode
+            if self.connection_type == 'standalone':
+                # In standalone mode: match executor memory to worker memory
+                # Read from environment variable set by start script
+                worker_memory = os.environ.get('SPARK_WORKER_MEMORY', '4g')
+                executor_memory = worker_memory
+                driver_memory = "4g"  # Driver always gets 4GB (runs on master)
+                logger.info(f"Standalone mode: executor memory = {executor_memory} (matches worker capacity)")
+            else:
+                # In local mode: use fixed 4GB
+                executor_memory = "4g"
+                driver_memory = "4g"
+                logger.info(f"Local mode: executor memory = {executor_memory}")
+
             # Build Spark session with clustering optimizations
             builder = (SparkSession.builder
                 .appName(self.app_name)
                 # Set master URL based on mode (standalone or local)
                 .master(master_url)
-                
-                # Memory configuration for clustering
-                .config("spark.driver.memory", "4g")
-                .config("spark.executor.memory", "4g")
+
+                # Memory configuration for clustering (dynamic based on worker capacity)
+                .config("spark.driver.memory", driver_memory)
+                .config("spark.executor.memory", executor_memory)
                 .config("spark.memory.fraction", "0.8")  # 80% of heap for execution/storage
                 .config("spark.memory.storageFraction", "0.3")  # 30% for cached data
                 
