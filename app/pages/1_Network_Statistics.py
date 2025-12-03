@@ -11,7 +11,7 @@ from typing import Dict, Any
 import logging
 import sys
 from pathlib import Path
-from components import render_video_link
+from components import render_video_link, render_algorithm_performance
 from utils.youtube_helpers import youtube_url, short_youtube_url, add_youtube_links_to_df
 
 # Add parent directory to path for imports
@@ -63,10 +63,11 @@ with tab1:
                 degree_analytics = DegreeAnalytics(spark_conn)
                 
                 # Run analysis
-                results = degree_analytics.run_full_analysis(sample_size=sample_size)
+                results, performance = degree_analytics.run_full_analysis(sample_size=sample_size)
                 
                 # Store results in session state
                 st.session_state['degree_results'] = results
+                st.session_state['degree_performance'] = performance
                 st.success("✅ Analysis complete!")
                 
             except Exception as e:
@@ -77,6 +78,11 @@ with tab1:
     if 'degree_results' in st.session_state:
         results = st.session_state['degree_results']
         agg_stats = results['aggregate_stats']
+        
+        # Display performance metrics
+        if 'degree_performance' in st.session_state:
+            render_algorithm_performance(st.session_state['degree_performance'])
+            st.divider()
         
         # Summary Statistics
         st.markdown("#### Summary Statistics")
@@ -160,10 +166,11 @@ with tab2:
                 cat_analytics = CategoryAnalytics(spark_conn)
                 
                 # Run analysis
-                results = cat_analytics.run_full_analysis(sample_size=cat_sample_size)
+                results, performance = cat_analytics.run_full_analysis(sample_size=cat_sample_size)
                 
                 # Store results in session state
                 st.session_state['category_results'] = results
+                st.session_state['category_performance'] = performance
                 st.success("✅ Analysis complete!")
                 
             except Exception as e:
@@ -173,6 +180,11 @@ with tab2:
     # Display results if available
     if 'category_results' in st.session_state:
         results = st.session_state['category_results']
+        
+        # Display performance metrics
+        if 'category_performance' in st.session_state:
+            render_algorithm_performance(st.session_state['category_performance'])
+            st.divider()
         
         # Videos by Category
         st.markdown("#### Videos by Category")

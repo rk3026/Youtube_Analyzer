@@ -4,7 +4,9 @@ Computes categorized video statistics (by category, length, views).
 """
 
 import logging
-from typing import Dict, Any
+import time
+from datetime import datetime
+from typing import Dict, Any, Tuple
 from pyspark.sql import DataFrame
 from pyspark.sql.functions import col, count, desc, when
 
@@ -154,7 +156,7 @@ class CategoryAnalytics:
         logger.info(f"Computed {len(results)} view count buckets")
         return results
     
-    def run_full_analysis(self, sample_size: int = None) -> Dict[str, Any]:
+    def run_full_analysis(self, sample_size: int = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """
         Run complete category analysis pipeline.
         
@@ -162,9 +164,10 @@ class CategoryAnalytics:
             sample_size: Optional sample size for videos (None = use all)
             
         Returns:
-            Dictionary with all analysis results
+            Tuple of (results dict, performance metrics dict)
         """
         logger.info("Starting full category analysis...")
+        start_time = time.time()
         
         # Load videos
         videos = self.spark_connector.load_collection_from_mongo('videos')
@@ -194,11 +197,28 @@ class CategoryAnalytics:
             logger.warning(f"Could not load video_snapshots for view data: {e}")
             view_dist = []
         
-        return {
+        execution_time = time.time() - start_time
+        
+        results = {
             'by_category': category_dist,
             'by_length': length_dist,
             'by_views': view_dist
         }
+        
+        performance = {
+            'execution_time': execution_time,
+            'rows_processed': videos.count() if sample_size is None else sample_size,
+            'rows_returned': len(category_dist) + len(length_dist) + len(view_dist),
+            'query_type': 'Category Analysis',
+            'timestamp': datetime.now(),
+            'additional_metrics': {
+                'sample_size': sample_size,
+                'analysis_type': 'categorized_statistics'
+            }
+        }
+        
+        logger.info(f"Category analysis completed in {execution_time:.3f}s")
+        return results, performance
     
     def save_to_mongo(self, results: Dict[str, list], collection_prefix: str = "categorized_statistics"):
         """

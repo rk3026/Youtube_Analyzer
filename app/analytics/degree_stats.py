@@ -4,6 +4,8 @@ Computes in-degree, out-degree, and total degree statistics for the YouTube netw
 """
 
 import logging
+import time
+from datetime import datetime
 from typing import Dict, Any, Tuple
 from pyspark.sql import DataFrame
 from pyspark.sql.functions import col, avg, min as spark_min, max as spark_max, stddev, count, desc
@@ -216,7 +218,7 @@ class DegreeAnalytics:
     def run_full_analysis(
         self, 
         sample_size: int = None
-    ) -> Dict[str, Any]:
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """
         Run complete degree analysis pipeline.
         
@@ -224,9 +226,10 @@ class DegreeAnalytics:
             sample_size: Optional sample size for edges (None = use all)
             
         Returns:
-            Dictionary with all analysis results
+            Tuple of (results dict, performance metrics dict)
         """
         logger.info("Starting full degree analysis...")
+        start_time = time.time()
         
         # Load data
         edges = self.spark_connector.load_collection_from_mongo('edges')
@@ -248,12 +251,29 @@ class DegreeAnalytics:
         top_10 = self.get_top_k_by_degree(degree_stats, k=10)
         distribution = self.get_degree_distribution(degree_stats, bins=50)
         
-        return {
+        execution_time = time.time() - start_time
+        
+        results = {
             'aggregate_stats': agg_stats,
             'top_videos': top_10,
             'distribution': distribution,
             'degree_stats_df': degree_stats  # For further analysis
         }
+        
+        performance = {
+            'execution_time': execution_time,
+            'rows_processed': edges.count() if sample_size is None else sample_size,
+            'rows_returned': len(top_10) + len(distribution),
+            'query_type': 'Degree Analysis',
+            'timestamp': datetime.now(),
+            'additional_metrics': {
+                'sample_size': sample_size,
+                'analysis_type': 'degree_distribution'
+            }
+        }
+        
+        logger.info(f"Degree analysis completed in {execution_time:.3f}s")
+        return results, performance
     
     def save_to_mongo(self, degree_stats: DataFrame, collection: str = "degree_statistics"):
         """
