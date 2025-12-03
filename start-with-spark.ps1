@@ -29,7 +29,7 @@ if ($NumWorkers -eq 0) {
     }
 
     # Memory per worker: 2-3GB per core (with minimum 4GB)
-    $MemoryPerCore = 2.5  # GB
+    $MemoryPerCore = 2  # GB
     $WorkerMemoryGB = [Math]::Max(4, [Math]::Ceiling($CoresPerWorker * $MemoryPerCore))
     $WorkerMemory = "$($WorkerMemoryGB)g"
 
@@ -185,21 +185,52 @@ try {
 
     # Stop Streamlit app
     Write-Host "Stopping Streamlit app..." -ForegroundColor Yellow
-    $appJob | Stop-Job | Remove-Job
+    Stop-Job -Job $appJob -ErrorAction SilentlyContinue
+    Remove-Job -Job $appJob -Force -ErrorAction SilentlyContinue
 
     # Stop Spark workers
     Write-Host "Stopping Spark workers..." -ForegroundColor Yellow
-    $workerJobs | Stop-Job | Remove-Job
+    $workerJobs | ForEach-Object {
+        Stop-Job -Job $_ -ErrorAction SilentlyContinue
+        Remove-Job -Job $_ -Force -ErrorAction SilentlyContinue
+    }
 
     # Stop Spark master
     Write-Host "Stopping Spark master..." -ForegroundColor Yellow
-    $masterJob | Stop-Job | Remove-Job
+    Stop-Job -Job $masterJob -ErrorAction SilentlyContinue
+    Remove-Job -Job $masterJob -Force -ErrorAction SilentlyContinue
 
-    # Kill any remaining Spark processes
-    Write-Host "Cleaning up any remaining Spark processes..." -ForegroundColor Yellow
-    Get-Process | Where-Object {
-        $_.ProcessName -like "*java*" -and $_.CommandLine -like "*spark*"
-    } | Stop-Process -Force -ErrorAction SilentlyContinue
+    # Kill all Spark-related Java processes
+    Write-Host "Cleaning up Spark Java processes..." -ForegroundColor Yellow
+    Get-CimInstance Win32_Process | Where-Object {
+        $_.Name -eq "java.exe" -and $_.CommandLine -like "*spark*"
+    } | ForEach-Object {
+        Write-Host "  Killing process $($_.ProcessId): $($_.Name)" -ForegroundColor Gray
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+
+    # Kill any orphaned cmd.exe processes related to Spark
+    Write-Host "Cleaning up command prompt windows..." -ForegroundColor Yellow
+    Get-CimInstance Win32_Process | Where-Object {
+        $_.Name -eq "cmd.exe" -and $_.CommandLine -like "*spark*"
+    } | ForEach-Object {
+        Write-Host "  Killing process $($_.ProcessId): cmd.exe" -ForegroundColor Gray
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+
+    # Final cleanup: kill any remaining java.exe with spark-class in command line
+    Start-Sleep -Seconds 1
+    Get-Process -Name "java" -ErrorAction SilentlyContinue | ForEach-Object {
+        try {
+            $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)"
+            if ($proc.CommandLine -like "*org.apache.spark*") {
+                Write-Host "  Killing remaining Spark process: $($_.Id)" -ForegroundColor Gray
+                Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+            }
+        } catch {
+            # Process may have already exited
+        }
+    }
 
     Write-Host ""
     Write-Host "All services stopped." -ForegroundColor Green
