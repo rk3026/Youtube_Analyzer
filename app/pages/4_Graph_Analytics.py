@@ -380,7 +380,7 @@ with tab2:
                         bins=[0, 10, 50, 100, 500, float('inf')],
                         labels=['Tiny (1-10)', 'Small (11-50)', 'Medium (51-100)', 'Large (101-500)', 'Huge (500+)']
                     )
-                    size_dist = size_bins.value_counts().reset_index()
+                    size_dist = size_bins.value_counts().reset_index(name='count')
                     size_dist.columns = ['Size Category', 'Number of Communities']
                     
                     fig_pie = px.pie(
