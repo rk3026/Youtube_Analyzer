@@ -2,10 +2,48 @@
 # This script starts the Spark cluster (master + workers) and the Streamlit app
 
 param(
-    [int]$NumWorkers = 2
+    [int]$NumWorkers = 0  # 0 = auto-detect optimal configuration (4 cores per worker)
 )
 
 $SCRIPT_DIR = $PSScriptRoot
+
+# Auto-detect and optimize CPU configuration if NumWorkers is 0
+if ($NumWorkers -eq 0) {
+    $CORES = (Get-CimInstance -ClassName Win32_Processor | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
+
+    # Reserve cores for OS and Spark driver
+    $ReservedCores = 4  # Fixed: Reserve 4 cores for OS/driver
+    $AvailableCores = $CORES - $ReservedCores
+
+    # Optimal configuration: 4-5 cores per worker
+    # Target 4 cores per worker for best performance
+    $CoresPerWorker = 4
+
+    # Calculate number of workers based on available cores
+    $NumWorkers = [Math]::Floor($AvailableCores / $CoresPerWorker)
+
+    # Ensure at least 1 worker
+    if ($NumWorkers -lt 1) {
+        $NumWorkers = 1
+        $CoresPerWorker = $AvailableCores
+    }
+
+    # Memory per worker: 2-3GB per core (with minimum 4GB)
+    $MemoryPerCore = 2.5  # GB
+    $WorkerMemoryGB = [Math]::Max(4, [Math]::Ceiling($CoresPerWorker * $MemoryPerCore))
+    $WorkerMemory = "$($WorkerMemoryGB)g"
+
+    $TotalAllocatedCores = $NumWorkers * $CoresPerWorker
+
+    Write-Host "Auto-detected $CORES CPU cores" -ForegroundColor Gray
+    Write-Host "Optimized configuration: $NumWorkers workers × $CoresPerWorker cores × $WorkerMemory memory" -ForegroundColor Cyan
+    Write-Host "Total allocated: $TotalAllocatedCores cores (reserved $ReservedCores for OS/driver)" -ForegroundColor Gray
+} else {
+    # Manual configuration fallback
+    $CoresPerWorker = 4
+    $WorkerMemory = "5g"
+    Write-Host "Using manual configuration: $NumWorkers workers × $CoresPerWorker cores" -ForegroundColor Gray
+}
 
 # Load SPARK_HOME from OS environment variable, with fallback to default
 if ($env:SPARK_HOME) {
@@ -46,16 +84,21 @@ Start-Sleep -Seconds 5
 # Step 2: Start Spark Workers
 Write-Host ""
 Write-Host "[2/4] Starting $NumWorkers Spark Worker(s)..." -ForegroundColor Green
+Write-Host "      Configuration: $CoresPerWorker core(s) per worker, $WorkerMemory memory per worker" -ForegroundColor Gray
 $workerJobs = @()
 for ($i = 1; $i -le $NumWorkers; $i++) {
     $workerJob = Start-Job -ScriptBlock {
-        param($sparkHome)
+        param($sparkHome, $cores, $memory)
         Set-Location "$sparkHome\bin"
-        & "$sparkHome\bin\spark-class" org.apache.spark.deploy.worker.Worker spark://localhost:7077 --host localhost
-    } -ArgumentList $SPARK_HOME
+        & "$sparkHome\bin\spark-class" org.apache.spark.deploy.worker.Worker spark://localhost:7077 --host localhost --cores $cores --memory $memory
+    } -ArgumentList $SPARK_HOME, $CoresPerWorker, $WorkerMemory
     $workerJobs += $workerJob
     Write-Host "      Worker $i started (Job ID: $($workerJob.Id))" -ForegroundColor Gray
-    Start-Sleep -Seconds 2
+
+    # Add a small delay between worker starts to avoid resource contention
+    if ($i -lt $NumWorkers) {
+        Start-Sleep -Milliseconds 500
+    }
 }
 
 # Wait for workers to register with master
@@ -63,11 +106,18 @@ Write-Host "      Waiting for workers to register with master..." -ForegroundCol
 Start-Sleep -Seconds 5
 
 # Step 3: Verify cluster is ready
+$TotalCoresAllocated = $NumWorkers * $CoresPerWorker
+# Extract numeric value from WorkerMemory (e.g., "5g" -> 5)
+$MemoryGB = [int]($WorkerMemory -replace '[^0-9]', '')
+$TotalMemoryAllocated = $NumWorkers * $MemoryGB
+
 Write-Host ""
 Write-Host "[3/4] Spark Cluster Status:" -ForegroundColor Green
 Write-Host "      Master UI:  http://localhost:8080" -ForegroundColor Cyan
 Write-Host "      Master URL: spark://localhost:7077" -ForegroundColor Cyan
 Write-Host "      Workers:    $NumWorkers" -ForegroundColor Cyan
+Write-Host "      Total Cores: $TotalCoresAllocated ($CoresPerWorker cores per worker)" -ForegroundColor Cyan
+Write-Host "      Total Memory: $($TotalMemoryAllocated)GB ($WorkerMemory per worker)" -ForegroundColor Cyan
 Write-Host "      Status:     Ready" -ForegroundColor Green
 
 # Step 4: Start Streamlit App
@@ -85,11 +135,17 @@ $env:SPARK_HOME = $SPARK_HOME
 $appJob = Start-Job -ScriptBlock {
     param($scriptDir)
     Set-Location $scriptDir
-    & poetry run streamlit run app/Home.py
+    # Redirect stderr to stdout so all output is captured together
+    & poetry run streamlit run app/Home.py 2>&1
 } -ArgumentList $SCRIPT_DIR
 
-# Wait a moment for Streamlit to start
+# Wait a moment for Streamlit to start and capture initial output
 Start-Sleep -Seconds 3
+
+# Display any buffered output in blue
+Receive-Job -Id $appJob.Id | ForEach-Object {
+    Write-Host $_ -ForegroundColor Blue
+}
 
 Write-Host ""
 Write-Host "=" * 70 -ForegroundColor Gray
@@ -113,9 +169,9 @@ try {
             break
         }
 
-        # Receive and display any output from the app
+        # Receive and display any output from the app in blue
         Receive-Job -Id $appJob.Id | ForEach-Object {
-            Write-Host $_
+            Write-Host $_ -ForegroundColor Blue
         }
 
         Start-Sleep -Seconds 1
