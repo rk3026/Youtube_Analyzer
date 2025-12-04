@@ -13,6 +13,16 @@ YouTube is one of the world’s most socially and commercially influential platf
 
 Dataset: ["Statistics and Social Network of YouTube Videos"](http://netsg.cs.sfu.ca/youtubedata/) by Xu Cheng, Cameron Dale, and Jiangchuan Liu.
 
+<img width="341" height="365" alt="image" src="https://github.com/user-attachments/assets/6e023f90-71e8-4128-915b-babb2df703f6" />
+<img width="1919" height="860" alt="image" src="https://github.com/user-attachments/assets/31588bca-deae-4838-ac1a-5f47e804335b" />
+<img width="1919" height="847" alt="image" src="https://github.com/user-attachments/assets/dc1454d3-f477-4826-a625-22fe1f7d9f4e" />
+<img width="1919" height="855" alt="image" src="https://github.com/user-attachments/assets/ada0f660-4697-42ea-b2be-e9e1c88a3099" />
+<img width="1919" height="847" alt="image" src="https://github.com/user-attachments/assets/fcd3f33d-0277-4611-aa05-377a26e2bd4c" />
+
+
+
+
+
 ---
 
 ## 🎯 Features
