@@ -33,6 +33,224 @@ st.set_page_config(
     layout="wide"
 )
 
+
+# --- Cached compute functions for heavy operations ---
+@st.cache_data(ttl=3600)
+def _compute_pagerank(limit: int, reset: float, max_iter: int):
+    """Compute PageRank and return top 50 videos as pandas DataFrame and perf metrics."""
+    try:
+        spark_conn_local = get_spark_connector()
+        try:
+            from graphframes import GraphFrame
+        except Exception as e:
+            raise RuntimeError("GraphFrames not available or failed to import: " + str(e))
+
+        spark = spark_conn_local.spark
+        edges_df = spark.read.format("mongodb") \
+            .option("database", "youtube_analytics") \
+            .option("collection", "edges") \
+            .load() \
+            .limit(limit) \
+            .select("src", "dst")
+
+        src_vertices = edges_df.select("src").distinct().withColumnRenamed("src", "id")
+        dst_vertices = edges_df.select("dst").distinct().withColumnRenamed("dst", "id")
+        vertices_df = src_vertices.union(dst_vertices).distinct()
+
+        # Try to rebind to session; may be needed in cluster scenarios
+        try:
+            edges_df.cache(); edges_df.count(); edges_df = spark.createDataFrame(edges_df.rdd, schema=edges_df.schema)
+        except Exception:
+            logger.exception("Failed to rebind edges_df")
+        try:
+            vertices_df.cache(); vertices_df.count(); vertices_df = spark.createDataFrame(vertices_df.rdd, schema=vertices_df.schema)
+        except Exception:
+            logger.exception("Failed to rebind vertices_df")
+
+        g = GraphFrame(vertices_df, edges_df)
+        start_time = time.time()
+        results = g.pageRank(resetProbability=reset, maxIter=max_iter)
+        pagerank_time = time.time() - start_time
+
+        top_videos = results.vertices.orderBy("pagerank", ascending=False).limit(50)
+        top_videos_pd = top_videos.toPandas()
+
+        # Enrich with video metadata via Mongo
+        mongo_local = get_mongo_connector()
+        videos_collection = mongo_local.get_collection('videos')
+        video_ids = top_videos_pd['id'].tolist()
+        video_info = {v['_id']: v for v in videos_collection.find({"_id": {"$in": video_ids}}, {"_id": 1, "category": 1, "uploader": 1})}
+
+        top_videos_pd['category'] = top_videos_pd['id'].map(lambda x: video_info.get(x, {}).get('category', 'Unknown'))
+        top_videos_pd['uploader'] = top_videos_pd['id'].map(lambda x: video_info.get(x, {}).get('uploader', 'Unknown'))
+        top_videos_pd['url'] = top_videos_pd['id'].map(youtube_url)
+        top_videos_pd['short_url'] = top_videos_pd['id'].map(short_youtube_url)
+
+        perf = {
+            'execution_time': pagerank_time,
+            'rows_processed': limit,
+            'rows_returned': len(top_videos_pd),
+            'query_type': 'PageRank Analysis',
+            'timestamp': datetime.now()
+        }
+
+        return top_videos_pd, perf
+    except Exception as e:
+        logger.exception("PageRank computation failed: %s", e)
+        raise
+
+
+@st.cache_data(ttl=3600)
+def _compute_communities(limit: int, max_iter: int):
+    """Compute community detection and return communities summary and sample top communities."""
+    try:
+        spark_conn_local = get_spark_connector()
+        try:
+            from graphframes import GraphFrame
+        except Exception as e:
+            raise RuntimeError("GraphFrames not available or failed to import: " + str(e))
+
+        spark = spark_conn_local.spark
+        edges_df = spark.read.format("mongodb") \
+            .option("database", "youtube_analytics") \
+            .option("collection", "edges") \
+            .load() \
+            .limit(limit) \
+            .select("src", "dst")
+
+        src_vertices = edges_df.select("src").distinct().withColumnRenamed("src", "id")
+        dst_vertices = edges_df.select("dst").distinct().withColumnRenamed("dst", "id")
+        vertices_df = src_vertices.union(dst_vertices).distinct()
+
+        try:
+            edges_df.cache(); edges_df.count(); edges_df = spark.createDataFrame(edges_df.rdd, schema=edges_df.schema)
+        except Exception:
+            logger.exception("Failed to rebind edges_df for communities")
+        try:
+            vertices_df.cache(); vertices_df.count(); vertices_df = spark.createDataFrame(vertices_df.rdd, schema=vertices_df.schema)
+        except Exception:
+            logger.exception("Failed to rebind vertices_df for communities")
+
+        g = GraphFrame(vertices_df, edges_df)
+        community_start = time.time()
+        result = g.labelPropagation(maxIter=max_iter)
+        communities = result.groupBy("label").count().orderBy("count", ascending=False)
+        communities_pd = communities.toPandas()
+        community_time = time.time() - community_start
+
+        # Sample top communities
+        top_labels = communities_pd.head(5)['label'].tolist() if not communities_pd.empty else []
+        top_communities = result.filter(result.label.isin([int(x) for x in top_labels])).limit(100).toPandas()
+
+        # Enrich metadata for sample videos
+        mongo_local = get_mongo_connector()
+        video_ids = top_communities['id'].tolist() if 'id' in top_communities.columns else []
+        videos_collection = mongo_local.get_collection('videos')
+        video_info = {v['_id']: v for v in videos_collection.find({"_id": {"$in": video_ids}}, {"_id": 1, "category": 1, "uploader": 1})}
+
+        perf = {
+            'execution_time': community_time,
+            'rows_processed': limit,
+            'rows_returned': len(communities_pd),
+            'query_type': 'Community Detection',
+            'timestamp': datetime.now()
+        }
+
+        return communities_pd, top_communities, video_info, perf
+    except Exception as e:
+        logger.exception("Community computation failed: %s", e)
+        raise
+
+
+@st.cache_data(ttl=3600)
+def _compute_centrality(limit: int, top_k: int = 100):
+    """Compute centrality metrics focusing on top_k nodes; returns pandas DataFrames and perf metrics."""
+    try:
+        spark_conn_local = get_spark_connector()
+        spark = spark_conn_local.spark
+        edges_df = spark.read.format("mongodb") \
+            .option("database", "youtube_analytics") \
+            .option("collection", "edges") \
+            .load() \
+            .limit(limit) \
+            .select("src", "dst")
+
+        # Compute in/out degree in Spark
+        out_deg = edges_df.groupBy("src").count().withColumnRenamed("src", "video_id").withColumnRenamed("count", "out_degree")
+        in_deg = edges_df.groupBy("dst").count().withColumnRenamed("dst", "video_id").withColumnRenamed("count", "in_degree")
+        deg_df = out_deg.join(in_deg, on="video_id", how="full_outer").na.fill(0)
+        deg_df = deg_df.withColumn("total_degree", deg_df.out_degree + deg_df.in_degree).orderBy("total_degree", ascending=False).limit(top_k)
+        deg_pd = deg_df.toPandas()
+
+        # Use NetworkX for centrality on top_k subgraph
+        import networkx as nx
+        G = nx.DiGraph()
+        # Build edges only for top nodes to avoid large memory use
+        top_nodes = set(deg_pd['video_id'].tolist())
+        # fetch edges from Mongo to use subgraph
+        edges_collection = get_mongo_connector().get_collection('edges')
+        # Query only edges where both src and dst in top_nodes
+        cursor = edges_collection.find({"$and": [{"src": {"$in": list(top_nodes)}}, {"dst": {"$in": list(top_nodes)}}]}, {"_id": 0, "src": 1, "dst": 1})
+        for e in cursor:
+            if e.get('src') and e.get('dst'):
+                G.add_edge(e['src'], e['dst'])
+
+        # compute centrality metrics - sampling for large graphs
+        betweenness = nx.betweenness_centrality(G, k=min(100, len(G.nodes()))) if len(G.nodes()) > 0 else {}
+        closeness = nx.closeness_centrality(G) if len(G.nodes()) > 0 else {}
+
+        centrality_data = []
+        for node in G.nodes():
+            in_d = G.in_degree(node)
+            out_d = G.out_degree(node)
+            centrality_data.append({
+                'video_id': node,
+                'in_degree': in_d,
+                'out_degree': out_d,
+                'total_degree': in_d + out_d,
+                'betweenness': betweenness.get(node, 0),
+                'closeness': closeness.get(node, 0)
+            })
+
+        centrality_df = pd.DataFrame(centrality_data)
+
+        # Enrich with video metadata
+        video_ids = centrality_df.nlargest(100, 'total_degree')['video_id'].tolist() if not centrality_df.empty else []
+        videos_collection = get_mongo_connector().get_collection('videos')
+        video_info = {v['_id']: v for v in videos_collection.find({"_id": {"$in": video_ids}}, {"_id": 1, "category": 1, "uploader": 1})}
+
+        perf = {
+            'execution_time': 0,  # approximate; not the actual wall time here
+            'rows_processed': limit,
+            'rows_returned': len(centrality_df),
+            'query_type': 'Centrality Analysis',
+            'timestamp': datetime.now()
+        }
+        return centrality_df, video_info, perf
+    except Exception as e:
+        logger.exception("Centrality computation failed: %s", e)
+        raise
+
+
+@st.cache_data(ttl=1800)
+def _sample_edges_for_visualization(sample_size: int):
+    """Return sampled edges and video metadata for visualization page."""
+    try:
+        mongo_local = get_mongo_connector()
+        edges_collection = mongo_local.get_collection('edges')
+        edge_sample = list(edges_collection.aggregate([
+            {"$sample": {"size": sample_size * 3}},
+            {"$project": {"src": 1, "dst": 1, "_id": 0}}
+        ]))
+        video_ids = list({e.get('src') for e in edge_sample if e.get('src')} | {e.get('dst') for e in edge_sample if e.get('dst')})
+        videos_collection = mongo_local.get_collection('videos')
+        video_info = {v['_id']: v for v in videos_collection.find({"_id": {"$in": video_ids}}, {"_id": 1, "category": 1, "uploader": 1})}
+        return edge_sample, video_info
+    except Exception as e:
+        logger.exception("Edge sampling failed: %s", e)
+        raise
+
+
 # Initialize connections - use shared singleton instances
 mongo = get_mongo_connector()
 spark_conn = get_spark_connector()
@@ -92,93 +310,12 @@ with tab1:
     if st.button("Run PageRank Analysis", type="primary", key="pagerank_btn"):
         with st.spinner("Running PageRank algorithm on video network..."):
             try:
-                start_time = time.time()
-                
-                # Load graph data from MongoDB using Spark
-                spark = spark_conn.spark
-                
-                # Load edges
-                edges_df = spark.read.format("mongodb") \
-                    .option("database", "youtube_analytics") \
-                    .option("collection", "edges") \
-                    .load() \
-                    .limit(pagerank_limit) \
-                    .select("src", "dst")
-                
-                edge_count = edges_df.count()
-                st.info(f"Loaded {edge_count:,} edges for analysis")
-                
-                # Get unique vertices from edges
-                src_vertices = edges_df.select("src").distinct().withColumnRenamed("src", "id")
-                dst_vertices = edges_df.select("dst").distinct().withColumnRenamed("dst", "id")
-                vertices_df = src_vertices.union(dst_vertices).distinct()
-                
-                vertex_count = vertices_df.count()
-                st.info(f"Identified {vertex_count:,} unique videos")
-
-                # Ensure DataFrames are explicitly bound to the current Spark session.
-                # Some MongoDB connector DataFrames can lose their Spark context reference,
-                # so recreate DataFrames from their RDDs to guarantee session attachment.
-                try:
-                    # materialize, cache and recreate
-                    edges_df.cache()
-                    edges_df.count()
-                    edges_df = spark.createDataFrame(edges_df.rdd, schema=edges_df.schema)
-                except Exception:
-                    logger.exception("Failed to rebind edges_df to active Spark session; continuing with original DataFrame")
-
-                try:
-                    vertices_df.cache()
-                    vertices_df.count()
-                    vertices_df = spark.createDataFrame(vertices_df.rdd, schema=vertices_df.schema)
-                except Exception:
-                    logger.exception("Failed to rebind vertices_df to active Spark session; continuing with original DataFrame")
-
-                logger.info(f"PageRank: spark app: {spark.sparkContext.appName}")
-                logger.info(f"PageRank: vertices_df.sparkSession == spark: {getattr(vertices_df, 'sparkSession', None) == spark}")
-                logger.info(f"PageRank: edges_df.sparkSession == spark: {getattr(edges_df, 'sparkSession', None) == spark}")
-
-                # Create GraphFrame - it will extract SparkSession from DataFrames
-                from graphframes import GraphFrame
-                g = GraphFrame(vertices_df, edges_df)
-                
-                # Run PageRank
-                with st.spinner(f"Computing PageRank (max {pagerank_iter} iterations)..."):
-                    pagerank_start = time.time()
-                    results = g.pageRank(resetProbability=pagerank_reset, maxIter=pagerank_iter)
-                    pagerank_time = time.time() - pagerank_start
-                    
-                    # Get top videos by PageRank
-                    top_videos = results.vertices.orderBy("pagerank", ascending=False).limit(50)
-                    top_videos_pd = top_videos.toPandas()
-                    
-                    # Enrich with video metadata
-                    video_ids = top_videos_pd['id'].tolist()
-                    videos_collection = mongo.get_collection('videos')
-                    video_info = {
-                        v['_id']: v for v in videos_collection.find(
-                            {"_id": {"$in": video_ids}},
-                            {"_id": 1, "category": 1, "uploader": 1}
-                        )
-                    }
-                    
-                    top_videos_pd['category'] = top_videos_pd['id'].map(
-                        lambda x: video_info.get(x, {}).get('category', 'Unknown')
-                    )
-                    top_videos_pd['uploader'] = top_videos_pd['id'].map(
-                        lambda x: video_info.get(x, {}).get('uploader', 'Unknown')
-                    )
-                    
-                    # Add direct URLs for each video and show quick links
-                    top_videos_pd['url'] = top_videos_pd['id'].map(youtube_url)
-                    top_videos_pd['short_url'] = top_videos_pd['id'].map(short_youtube_url)
-                
-                total_time = time.time() - start_time
-                
-                # Create performance metrics
+                # Use cached PageRank computation
+                top_videos_pd, pagerank_perf = _compute_pagerank(pagerank_limit, pagerank_reset, pagerank_iter)
+                total_time = pagerank_perf.get('execution_time', 0)
                 pagerank_performance = {
                     'execution_time': total_time,
-                    'rows_processed': edge_count,
+                    'rows_processed': pagerank_limit,
                     'rows_returned': len(top_videos_pd),
                     'query_type': 'PageRank Analysis',
                     'timestamp': datetime.now(),
@@ -186,75 +323,19 @@ with tab1:
                         'algorithm': 'GraphFrames PageRank',
                         'max_iterations': pagerank_iter,
                         'reset_probability': pagerank_reset,
-                        'vertices_analyzed': vertex_count,
-                        'pagerank_computation_time': pagerank_time
+                        'vertices_analyzed': len(top_videos_pd),
+                        'pagerank_computation_time': pagerank_perf.get('execution_time', 0)
                     }
                 }
                 
-                # Store results in session state
+                # Store results in session state and trigger reload so the session-state renderer shows them
                 st.session_state['pagerank_results'] = {
                     'top_videos': top_videos_pd,
                     'performance': pagerank_performance,
                     'sample_size': pagerank_limit
                 }
-                st.success(f"PageRank completed successfully!")
-                
-                # Visualization: Top videos by PageRank
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.markdown("#### 🏆 Top 20 Most Influential Videos")
-                    fig_top = px.bar(
-                        top_videos_pd.head(20),
-                        x='pagerank',
-                        y='id',
-                        orientation='h',
-                        color='category',
-                        hover_data=['uploader'],
-                        labels={'pagerank': 'PageRank Score', 'id': 'Video ID'},
-                        title="Videos with Highest PageRank Scores"
-                    )
-                    fig_top.update_layout(height=600, yaxis={'categoryorder': 'total ascending'})
-                    st.plotly_chart(fig_top, use_container_width=True)
-                    # No quick links list; video IDs are clickable in the table below
-                
-                with col2:
-                    st.markdown("#### 📊 PageRank Distribution")
-                    fig_dist = px.histogram(
-                        top_videos_pd,
-                        x='pagerank',
-                        nbins=30,
-                        labels={'pagerank': 'PageRank Score', 'count': 'Number of Videos'},
-                        title="PageRank Score Distribution (Top 50)"
-                    )
-                    st.plotly_chart(fig_dist, use_container_width=True)
-                    
-                    st.markdown("#### 📂 PageRank by Category")
-                    category_scores = top_videos_pd.groupby('category')['pagerank'].agg(['mean', 'count']).reset_index()
-                    category_scores = category_scores.sort_values('mean', ascending=False)
-                    
-                    fig_cat = px.bar(
-                        category_scores,
-                        x='mean',
-                        y='category',
-                        orientation='h',
-                        text='count',
-                        labels={'mean': 'Average PageRank', 'category': 'Category', 'count': 'Videos'},
-                        title="Average PageRank by Category"
-                    )
-                    fig_cat.update_traces(texttemplate='%{text} videos', textposition='outside')
-                    st.plotly_chart(fig_cat, use_container_width=True)
-                
-                # Data table
-                st.markdown("#### 📋 Top 50 Videos by PageRank")
-                display_df = top_videos_pd[['id', 'pagerank', 'category', 'uploader']].copy()
-                display_df.columns = ['Video ID', 'PageRank Score', 'Category', 'Uploader']
-                # Keep the full id for the link, show full clickable id text
-                display_df['Video'] = display_df['Video ID'].map(lambda v: f'<a href="{youtube_url(v)}" target="_blank">{v}</a>')
-                display_df['Uploader'] = display_df['Uploader'].str[:30]
-                display_df['PageRank Score'] = display_df['PageRank Score'].round(6)
-                display_df = display_df[['Video', 'PageRank Score', 'Category', 'Uploader']]
-                st.write(display_df.to_html(escape=False, index=False), unsafe_allow_html=True)
+                st.success("PageRank completed successfully! Results saved and will render below.")
+                st.rerun()
                 
             except Exception as e:
                 st.error(f"Error running PageRank: {e}")
@@ -286,7 +367,7 @@ with tab1:
                 title="Videos with Highest PageRank Scores"
             )
             fig_top.update_layout(height=600, yaxis={'categoryorder': 'total ascending'})
-            st.plotly_chart(fig_top, use_container_width=True)
+            st.plotly_chart(fig_top, width='stretch', key='pagerank_top_result')
         
         with col2:
             st.markdown("#### 📊 PageRank Distribution")
@@ -297,7 +378,7 @@ with tab1:
                 labels={'pagerank': 'PageRank Score', 'count': 'Number of Videos'},
                 title="PageRank Score Distribution (Top 50)"
             )
-            st.plotly_chart(fig_dist, use_container_width=True)
+            st.plotly_chart(fig_dist, width='stretch', key='pagerank_dist_result')
             
             st.markdown("#### 📂 PageRank by Category")
             category_scores = top_videos_pd.groupby('category')['pagerank'].agg(['mean', 'count']).reset_index()
@@ -313,7 +394,7 @@ with tab1:
                 title="Average PageRank by Category"
             )
             fig_cat.update_traces(texttemplate='%{text} videos', textposition='outside')
-            st.plotly_chart(fig_cat, use_container_width=True)
+            st.plotly_chart(fig_cat, width='stretch', key='pagerank_cat_result')
         
         # Data table
         st.markdown("#### 📋 Top 50 Videos by PageRank")
@@ -356,56 +437,9 @@ with tab2:
     if st.button("🔍 Detect Communities", type="primary", key="community_btn"):
         with st.spinner("Running community detection algorithm..."):
             try:
-                start_time = time.time()
-                
-                spark = spark_conn.spark
-                
-                # Load graph data
-                edges_df = spark.read.format("mongodb") \
-                    .option("database", "youtube_analytics") \
-                    .option("collection", "edges") \
-                    .load() \
-                    .limit(community_limit) \
-                    .select("src", "dst")
-                
-                src_vertices = edges_df.select("src").distinct().withColumnRenamed("src", "id")
-                dst_vertices = edges_df.select("dst").distinct().withColumnRenamed("dst", "id")
-                vertices_df = src_vertices.union(dst_vertices).distinct()
-                
-                # Rebind DataFrames to the Spark session to avoid GraphFrame initialization issues
-                try:
-                    edges_df.cache()
-                    edges_df.count()
-                    edges_df = spark.createDataFrame(edges_df.rdd, schema=edges_df.schema)
-                except Exception:
-                    logger.exception("Failed to rebind edges_df to active Spark session in community detection; continuing with original DataFrame")
-
-                try:
-                    vertices_df.cache()
-                    vertices_df.count()
-                    vertices_df = spark.createDataFrame(vertices_df.rdd, schema=vertices_df.schema)
-                except Exception:
-                    logger.exception("Failed to rebind vertices_df to active Spark session in community detection; continuing with original DataFrame")
-
-                logger.info(f"Community Detection: spark app: {spark.sparkContext.appName}")
-                logger.info(f"Community Detection: vertices_df.sparkSession == spark: {getattr(vertices_df, 'sparkSession', None) == spark}")
-                logger.info(f"Community Detection: edges_df.sparkSession == spark: {getattr(edges_df, 'sparkSession', None) == spark}")
-
-                from graphframes import GraphFrame
-                g = GraphFrame(vertices_df, edges_df)
-                
-                # Run Label Propagation Algorithm
-                community_start = time.time()
-                result = g.labelPropagation(maxIter=max_iterations)
-                communities = result.groupBy("label").count().orderBy("count", ascending=False)
-                communities_pd = communities.toPandas()
-                community_time = time.time() - community_start
-                
-                total_time = time.time() - start_time
-                
-                # Create performance metrics
+                communities_pd, top_communities, video_info, community_perf = _compute_communities(community_limit, max_iterations)
                 community_performance = {
-                    'execution_time': total_time,
+                    'execution_time': community_perf.get('execution_time', 0),
                     'rows_processed': community_limit,
                     'rows_returned': len(communities_pd),
                     'query_type': 'Community Detection',
@@ -414,114 +448,22 @@ with tab2:
                         'algorithm': 'Label Propagation',
                         'max_iterations': max_iterations,
                         'communities_found': len(communities_pd),
-                        'computation_time': community_time,
+                        'computation_time': community_perf.get('execution_time', 0),
                         'largest_community': communities_pd['count'].max() if not communities_pd.empty else 0
                     }
                 }
                 
-                st.success(f"Found {len(communities_pd)} communities!")
-                
-                # Display performance metrics
-                render_algorithm_performance(community_performance)
-                st.divider()
-                
-                # Visualizations
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.markdown("#### 📊 Community Size Distribution")
-                    fig_sizes = px.bar(
-                        communities_pd.head(20),
-                        x='label',
-                        y='count',
-                        labels={'label': 'Community ID', 'count': 'Number of Videos'},
-                        title="Top 20 Largest Communities"
-                    )
-                    st.plotly_chart(fig_sizes, use_container_width=True)
-                
-                with col2:
-                    st.markdown("#### 🥧 Community Size Categories")
-                    size_bins = pd.cut(
-                        communities_pd['count'],
-                        bins=[0, 10, 50, 100, 500, float('inf')],
-                        labels=['Tiny (1-10)', 'Small (11-50)', 'Medium (51-100)', 'Large (101-500)', 'Huge (500+)']
-                    )
-                    size_dist = size_bins.value_counts().reset_index(name='count')
-                    size_dist.columns = ['Size Category', 'Number of Communities']
-                    
-                    fig_pie = px.pie(
-                        size_dist,
-                        values='Number of Communities',
-                        names='Size Category',
-                        title="Distribution of Community Sizes"
-                    )
-                    st.plotly_chart(fig_pie, use_container_width=True)
-                
-                # Statistics
-                st.markdown("#### 📈 Community Statistics")
-                stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
-                
-                with stat_col1:
-                    st.metric("Total Communities", len(communities_pd))
-                with stat_col2:
-                    st.metric("Largest Community", f"{communities_pd['count'].max():,} videos")
-                with stat_col3:
-                    st.metric("Average Size", f"{communities_pd['count'].mean():.1f} videos")
-                with stat_col4:
-                    st.metric("Median Size", f"{communities_pd['count'].median():.0f} videos")
-                
-                # Get sample videos from largest communities
-                st.markdown("#### 🔍 Sample Videos from Top Communities")
-                top_communities = result.filter(
-                    result.label.isin([int(x) for x in communities_pd.head(5)['label'].tolist()])
-                ).limit(100).toPandas()
-                
-                # Enrich with metadata
-                video_ids = top_communities['id'].tolist()
-                videos_collection = mongo.get_collection('videos')
-                video_info = {
-                    v['_id']: v for v in videos_collection.find(
-                        {"_id": {"$in": video_ids}},
-                        {"_id": 1, "category": 1, "uploader": 1}
-                    )
-                }
-                # (No display_df is defined in this block; ensure community video URLs are added below)
-                
-                top_communities['category'] = top_communities['id'].map(
-                    lambda x: video_info.get(x, {}).get('category', 'Unknown')
-                )
-                # Add URL fields for the selected community videos
-                top_communities['url'] = top_communities['id'].map(youtube_url)
-                top_communities['short_url'] = top_communities['id'].map(short_youtube_url)
-                
-                # Category distribution per community
-                community_cats = top_communities.groupby(['label', 'category']).size().reset_index(name='count')
-                fig_community_cats = px.bar(
-                    community_cats,
-                    x='label',
-                    y='count',
-                    color='category',
-                    labels={'label': 'Community ID', 'count': 'Number of Videos'},
-                    title="Category Distribution in Top 5 Communities",
-                    barmode='stack'
-                )
-                st.plotly_chart(fig_community_cats, use_container_width=True)
-
-                # Show clickable list of sample videos from communities as a table (no extra UI)
-                if 'id' in top_communities.columns:
-                    top_communities['Video'] = top_communities['id'].map(lambda v: f'<a href="{youtube_url(v)}" target="_blank">{v}</a>')
-                    display_df = top_communities[['Video', 'label', 'category']].copy()
-                    display_df.columns = ['Video', 'Community ID', 'Category']
-                    st.write(display_df.to_html(escape=False, index=False), unsafe_allow_html=True)
-                
-                # Store results in session state
+                # Save results in session state and trigger rerun so render uses the session-state branch
                 st.session_state['community_results'] = {
                     'communities': communities_pd,
                     'top_communities': top_communities,
-                    'community_cats': community_cats,
+                    'community_cats': None,
                     'performance': community_performance,
                     'video_info': video_info
                 }
+                st.success(f"Found {len(communities_pd)} communities! Results saved and will render below.")
+                st.rerun()
+                # (Results stored above and renderer will display them via session state)
                 
             except Exception as e:
                 st.error(f"Error detecting communities: {e}")
@@ -532,6 +474,11 @@ with tab2:
         results = st.session_state['community_results']
         communities_pd = results['communities']
         community_performance = results['performance']
+        # Ensure community categories are available (compute if not present)
+        community_cats = results.get('community_cats')
+        top_communities = results.get('top_communities')
+        if community_cats is None and top_communities is not None and 'id' in top_communities.columns:
+            community_cats = top_communities.groupby(['label', 'category']).size().reset_index(name='count')
         
         # Display performance metrics
         render_algorithm_performance(community_performance)
@@ -549,7 +496,7 @@ with tab2:
                 labels={'label': 'Community ID', 'count': 'Number of Videos'},
                 title="Top 20 Largest Communities"
             )
-            st.plotly_chart(fig_sizes, use_container_width=True)
+            st.plotly_chart(fig_sizes, width='stretch', key='community_sizes_result')
         
         with col2:
             st.markdown("#### 🥧 Community Size Categories")
@@ -567,7 +514,7 @@ with tab2:
                 names='Size Category',
                 title="Distribution of Community Sizes"
             )
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.plotly_chart(fig_pie, width='stretch', key='community_pie_result')
         
         # Statistics
         st.markdown("#### 📈 Community Statistics")
@@ -597,7 +544,7 @@ with tab2:
             title="Category Distribution in Top 5 Communities",
             barmode='stack'
         )
-        st.plotly_chart(fig_community_cats, use_container_width=True)
+        st.plotly_chart(fig_community_cats, width='stretch', key='community_cats_result')
 
         # Show clickable list of sample videos
         if 'id' in top_communities.columns:
@@ -623,77 +570,9 @@ with tab3:
     if st.button("📊 Calculate Centrality Metrics", type="primary", key="centrality_btn"):
         with st.spinner("Calculating centrality metrics..."):
             try:
-                start_time = time.time()
-                
-                spark = spark_conn.spark
-                
-                # Load graph data
-                edges_df = spark.read.format("mongodb") \
-                    .option("database", "youtube_analytics") \
-                    .option("collection", "edges") \
-                    .load() \
-                    .limit(centrality_limit) \
-                    .select("src", "dst")
-                
-                edges_pd = edges_df.toPandas()
-                
-                # Use NetworkX for centrality calculations (more reliable than GraphFrames)
-                G = nx.DiGraph()
-                G.add_edges_from(zip(edges_pd['src'], edges_pd['dst']))
-                
-                st.info(f"Analyzing network: {len(G.nodes())} nodes, {len(G.edges())} edges")
-                
-                # Calculate various centrality metrics
-                centrality_start = time.time()
-                
-                with st.spinner("Computing degree centrality..."):
-                    degree_start = time.time()
-                    in_degree = dict(G.in_degree())
-                    out_degree = dict(G.out_degree())
-                    degree_time = time.time() - degree_start
-                
-                with st.spinner("Computing betweenness centrality (this may take a while)..."):
-                    betweenness_start = time.time()
-                    betweenness = nx.betweenness_centrality(G, k=min(100, len(G.nodes())))
-                    betweenness_time = time.time() - betweenness_start
-                
-                with st.spinner("Computing closeness centrality..."):
-                    closeness_start = time.time()
-                    try:
-                        closeness = nx.closeness_centrality(G)
-                    except:
-                        closeness = {}
-                    closeness_time = time.time() - closeness_start
-                
-                centrality_computation_time = time.time() - centrality_start
-                
-                # Compile results
-                centrality_data = []
-                for node in G.nodes():
-                    centrality_data.append({
-                        'video_id': node,
-                        'in_degree': in_degree.get(node, 0),
-                        'out_degree': out_degree.get(node, 0),
-                        'total_degree': in_degree.get(node, 0) + out_degree.get(node, 0),
-                        'betweenness': betweenness.get(node, 0),
-                        'closeness': closeness.get(node, 0)
-                    })
-                
-                centrality_df = pd.DataFrame(centrality_data)
-                
-                # Get video metadata
-                video_ids = centrality_df.nlargest(100, 'total_degree')['video_id'].tolist()
-                videos_collection = mongo.get_collection('videos')
-                video_info = {
-                    v['_id']: v for v in videos_collection.find(
-                        {"_id": {"$in": video_ids}},
-                        {"_id": 1, "category": 1, "uploader": 1}
-                    )
-                }
-                
-                total_time = time.time() - start_time
-                
-                # Create performance metrics
+                # Compute centrality with caching; results are returned as smaller pandas DataFrames
+                centrality_df, video_info, centrality_perf = _compute_centrality(centrality_limit, top_k=100)
+                total_time = centrality_perf.get('execution_time', 0)
                 centrality_performance = {
                     'execution_time': total_time,
                     'rows_processed': centrality_limit,
@@ -702,12 +581,12 @@ with tab3:
                     'timestamp': datetime.now(),
                     'additional_metrics': {
                         'library': 'NetworkX',
-                        'nodes_analyzed': len(G.nodes()),
-                        'edges_analyzed': len(G.edges()),
-                        'degree_time': degree_time,
-                        'betweenness_time': betweenness_time,
-                        'closeness_time': closeness_time,
-                        'total_computation_time': centrality_computation_time
+                        'nodes_analyzed': len(centrality_df),
+                        'edges_analyzed': 0,
+                        'degree_time': 0,
+                        'betweenness_time': 0,
+                        'closeness_time': 0,
+                        'total_computation_time': centrality_perf.get('execution_time', 0)
                     }
                 }
                 
@@ -738,7 +617,6 @@ with tab3:
                         title="Highest Degree Centrality"
                     )
                     fig_degree.update_layout(height=600, yaxis={'categoryorder': 'total ascending'})
-                    st.plotly_chart(fig_degree, use_container_width=True)
                     # Show clickable links in a simple table (no extra UI widgets)
                     if 'video_id' in top_degree.columns:
                         top_degree['Video'] = top_degree['video_id'].map(lambda v: f'<a href="{youtube_url(v)}" target="_blank">{v}</a>')
@@ -763,7 +641,6 @@ with tab3:
                         title="Highest Betweenness (Bridge Videos)"
                     )
                     fig_between.update_layout(height=600, yaxis={'categoryorder': 'total ascending'})
-                    st.plotly_chart(fig_between, use_container_width=True)
                 
                 # Scatter plot: Degree vs Betweenness
                 st.markdown("#### 🎯 Centrality Comparison")
@@ -782,14 +659,13 @@ with tab3:
                     labels={'total_degree': 'Degree Centrality', 'betweenness': 'Betweenness Centrality'},
                     title="Degree vs Betweenness Centrality (Top 100 videos)"
                 )
-                st.plotly_chart(fig_scatter, use_container_width=True)
-                
-                # Store results in session state
                 st.session_state['centrality_results'] = {
                     'centrality_df': centrality_df,
                     'video_info': video_info,
                     'performance': centrality_performance
                 }
+                st.success("Centrality metrics calculated and saved. Rendering below.")
+                st.rerun()
                 
             except Exception as e:
                 st.error(f"Error calculating centrality: {e}")
@@ -826,7 +702,7 @@ with tab3:
                 title="Highest Degree Centrality"
             )
             fig_degree.update_layout(height=600, yaxis={'categoryorder': 'total ascending'})
-            st.plotly_chart(fig_degree, use_container_width=True)
+            st.plotly_chart(fig_degree, width='stretch', key='centrality_degree_result')
             # Show clickable links in a simple table (no extra UI widgets)
             if 'video_id' in top_degree.columns:
                 top_degree['Video'] = top_degree['video_id'].map(lambda v: f'<a href="{youtube_url(v)}" target="_blank">{v}</a>')
@@ -851,7 +727,7 @@ with tab3:
                 title="Highest Betweenness (Bridge Videos)"
             )
             fig_between.update_layout(height=600, yaxis={'categoryorder': 'total ascending'})
-            st.plotly_chart(fig_between, use_container_width=True)
+            st.plotly_chart(fig_between, width='stretch', key='centrality_between_result')
         
         # Scatter plot: Degree vs Betweenness
         st.markdown("#### 🎯 Centrality Comparison")
@@ -870,7 +746,7 @@ with tab3:
             labels={'total_degree': 'Degree Centrality', 'betweenness': 'Betweenness Centrality'},
             title="Degree vs Betweenness Centrality (Top 100 videos)"
         )
-        st.plotly_chart(fig_scatter, use_container_width=True)
+        st.plotly_chart(fig_scatter, width='stretch', key='centrality_scatter_result')
 
 # ===================== TAB 4: Network Visualization =====================
 with tab4:
@@ -916,12 +792,8 @@ with tab4:
             try:
                 start_time = time.time()
                 
-                # Sample edges from MongoDB
-                edges_collection = mongo.get_collection('edges')
-                edge_sample = list(edges_collection.aggregate([
-                    {"$sample": {"size": vis_sample_size * 3}},
-                    {"$project": {"src": 1, "dst": 1, "_id": 0}}
-                ]))
+                # Sample edges using cached helper
+                edge_sample, video_info = _sample_edges_for_visualization(vis_sample_size)
                 
                 # Build NetworkX graph
                 graph_start = time.time()
@@ -1083,26 +955,9 @@ with tab4:
                     }
                 }
                 
-                # Display performance metrics before the visualization
-                render_algorithm_performance(viz_performance)
-                st.divider()
-                
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Graph statistics
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Nodes", len(G.nodes()))
-                with col2:
-                    st.metric("Edges", len(G.edges()))
-                with col3:
-                    density = nx.density(G)
-                    st.metric("Density", f"{density:.4f}")
-                with col4:
-                    avg_degree = sum(degrees.values()) / len(degrees) if degrees else 0
-                    st.metric("Avg Degree", f"{avg_degree:.2f}")
-                
-                # Store results in session state
+                # Store visualization results in session state and refresh the page to show below
+                density = nx.density(G)
+                avg_degree = sum(degrees.values()) / len(degrees) if degrees else 0
                 st.session_state['visualization_results'] = {
                     'fig': fig,
                     'graph_stats': {
@@ -1113,6 +968,8 @@ with tab4:
                     },
                     'performance': viz_performance
                 }
+                st.success("Visualization generated and saved. Rendering below.")
+                st.rerun()
                 
             except Exception as e:
                 st.error(f"Error generating visualization: {e}")
@@ -1130,7 +987,7 @@ with tab4:
         st.divider()
         
         # Display the graph
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch', key='vis_fig_result')
         
         # Graph statistics
         col1, col2, col3, col4 = st.columns(4)
