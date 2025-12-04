@@ -10,6 +10,7 @@ ENV/
 *.egg-info/
 *.egg
 *.sqlite3
+.env.example
 
 # Jupyter Notebooks
 .ipynb_checkpoints/
