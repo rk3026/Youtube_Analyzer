@@ -1,6 +1,6 @@
 # YouTube Analyzer
 
-A data analytics platform for large-scale YouTube video network datasets. The project leverages **NoSQL (MongoDB)**, **Hadoop MapReduce**, and **Apache Spark (GraphX/GraphFrames)** to store, process, and analyze YouTube data, uncovering insights into trends, influence, and user interaction patterns.
+A data analytics platform for large-scale YouTube video network datasets. The project leverages **NoSQL (MongoDB)** and **Apache Spark (GraphX/GraphFrames)** to store, process, and analyze YouTube data, uncovering insights into trends, influence, and user interaction patterns.
 
 ---
 
